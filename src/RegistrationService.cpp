@@ -1,5 +1,4 @@
 #include "RegistrationService.h"
-#include "Configuration.h"
 #include <Arduino.h>
 #include <WiFi.h>
 
@@ -17,24 +16,7 @@ void RegistrationService::Register()
 {
     Serial.println("Registering device...");
 
-	String hardwareId =
-		WiFi.macAddress();
-
-	hardwareId.replace(":", "");
-	hardwareId.toUpperCase();
-
-	String request =
-		"{"
-		"\"hardwareId\":\"" + hardwareId + "\","
-		 "\"deviceType\":" + String(_deviceType) + ","
-		"\"firmwareVersion\":\"1.0.0\""
-		"}";
-
-    auto response =
-        _httpService.Post(
-            String(Configuration::ControlServerUrl) + "/api/device/register",
-            request);
-
+    auto response = _httpService.RegisterDevice(_deviceType);
 
     Serial.println(response);
 }

@@ -1,6 +1,5 @@
 #include "ProvisioningService.h"
 #include "Configuration.h"
-
 #include <Arduino.h>
 #include <WiFi.h>
 
@@ -58,11 +57,11 @@ void ProvisioningService::Loop()
     _server.handleClient();
 	
 	if (millis() - _lastHeartbeat >= HEARTBEAT_INTERVAL)
-{
-    _lastHeartbeat = millis();
+	{
+		_lastHeartbeat = millis();
 
-    SendHeartbeat();
-}
+		_httpService.SendHeartbeat();
+	}
 }
 
 void ProvisioningService::ConfigureRoutes()
@@ -174,26 +173,7 @@ void ProvisioningService::ConnectToWifi()
     Serial.println(WiFi.localIP());
 }
 
-void ProvisioningService::SendHeartbeat()
+bool ProvisioningService::IsConnected() const
 {
-    Serial.println("Sending heartbeat...");
-	
-	String hardwareId =	WiFi.macAddress();
-
-	hardwareId.replace(":", "");
-	hardwareId.toUpperCase();
-
-    String request =
-        "{"
-        "\"hardwareId\":\"" + hardwareId + "\","
-        "\"firmwareVersion\":\"1.0.0\""
-        "}";
-
-    auto response =
-        _httpService.Post(
-            String(Configuration::ControlServerUrl) + "/api/device/heartbeat",
-            request);
-
-
-    Serial.println(response);
-}
+    return WiFi.status() == WL_CONNECTED;
+}	

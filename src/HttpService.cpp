@@ -1,6 +1,8 @@
 #include "HttpService.h"
+#include "Configuration.h"
 #include <WiFiClient.h>
 #include <HTTPClient.h>
+#include <WiFi.h>
 
 String HttpService::Post(
     const String& url,
@@ -51,3 +53,56 @@ String HttpService::Post(
 
     return response;
 }
+
+String HttpService::GetHardwareId()
+{
+    String hardwareId = WiFi.macAddress();
+
+    hardwareId.replace(":", "");
+    hardwareId.toUpperCase();
+
+    return hardwareId;
+}
+
+String HttpService::SendHeartbeat()
+{
+    String request =
+        "{"
+        "\"hardwareId\":\"" + GetHardwareId() + "\","
+        "\"firmwareVersion\":\"1.0.0\""
+        "}";
+
+    return Post(
+        String(Configuration::ControlServerUrl) + "/api/device/heartbeat",
+        request);
+}
+
+String HttpService::PostDeviceState(bool isOpen)
+{
+    String request =
+        "{"
+        "\"hardwareId\":\"" + GetHardwareId() + "\","
+        "\"state\":{"
+            "\"isOpen\":" + String(isOpen ? "true" : "false") +
+        "}"
+        "}";
+
+    return Post(
+        String(Configuration::ControlServerUrl) + "/api/device/state",
+        request);
+}
+
+String HttpService::RegisterDevice(int deviceType)
+{
+    String request =
+        "{"
+        "\"hardwareId\":\"" + GetHardwareId() + "\","
+        "\"deviceType\":" + String(deviceType) + ","
+        "\"firmwareVersion\":\"" + String(Configuration::FirmwareVersion) + "\""
+        "}";
+
+    return Post(
+        String(Configuration::ControlServerUrl) + "/api/device/register",
+        request);
+}
+

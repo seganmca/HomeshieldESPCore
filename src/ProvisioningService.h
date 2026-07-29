@@ -17,6 +17,7 @@ public:
 
     void Loop();
 	
+	bool IsConnected() const;
 
 private:
 
@@ -28,8 +29,6 @@ private:
 
     void HandleSave();
 	
-	void SendHeartbeat();
-
     StorageService& _storageService;
 	RegistrationService& _registrationService;
 
@@ -40,4 +39,5 @@ private:
 	unsigned long _lastHeartbeat = 0;
 
     static constexpr unsigned long HEARTBEAT_INTERVAL = 60000;	
+	
 };
