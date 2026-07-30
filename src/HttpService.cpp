@@ -77,13 +77,13 @@ String HttpService::SendHeartbeat()
         request);
 }
 
-String HttpService::PostDeviceState(bool isOpen)
+String HttpService::PostDeviceState(int state)
 {
     String request =
         "{"
         "\"hardwareId\":\"" + GetHardwareId() + "\","
         "\"state\":{"
-            "\"isOpen\":" + String(isOpen ? "true" : "false") +
+            "\"state\":" + state +
         "}"
         "}";
 
@@ -93,6 +93,7 @@ String HttpService::PostDeviceState(bool isOpen)
 }
 
 String HttpService::RegisterDevice(int deviceType)
+
 {
     String request =
         "{"

@@ -10,7 +10,7 @@ public:
         const String& url,
         const String& json);
 		
-	String PostDeviceState(bool isOpen);
+	String PostDeviceState(int state);
 	String SendHeartbeat();
 	String RegisterDevice(int deviceType);
 	

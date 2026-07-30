@@ -11,4 +11,6 @@ namespace DeviceTypes
     constexpr int Camera = 4;
 
     constexpr int Siren = 5;
+
+    constexpr int Light = 6;
 }
