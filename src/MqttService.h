@@ -2,6 +2,7 @@
 
 #include <WiFi.h>
 #include <PubSubClient.h>
+#include <DeviceIdentity.h>
 
 class MqttService
 {
@@ -14,11 +15,11 @@ public:
 
     void loop();
 
+	void publish( const String& topic,  const String& message);
+
     void addSubscription(const String& topic);
 
     void setCallback(MQTT_CALLBACK_SIGNATURE);
-
-    String GetHardwareId();
 
 private:
     void connect();

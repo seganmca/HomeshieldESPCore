@@ -17,8 +17,6 @@ public:
 
     void Loop();
 	
-	bool IsConnected() const;
-
 private:
 
 	void ConnectToWifi();
@@ -35,9 +33,4 @@ private:
     WebServer _server{80};
 	
 	HttpService& _httpService;
-
-	unsigned long _lastHeartbeat = 0;
-
-    static constexpr unsigned long HEARTBEAT_INTERVAL = 60000;	
-	
 };

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <Arduino.h>
+#include <DeviceIdentity.h>
 
 class HttpService
 {
@@ -13,8 +14,6 @@ public:
 	String PostDeviceState(int state);
 	String SendHeartbeat();
 	String RegisterDevice(int deviceType);
-	
-private:	
 	String GetHardwareId();
 	
 };

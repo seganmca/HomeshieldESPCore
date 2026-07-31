@@ -12,7 +12,7 @@ void MqttService::begin(
     _server = server;
     _port = port;
 
-    _clientId = GetHardwareId();
+    _clientId = DeviceIdentity::GetHardwareId();
 
     _mqttClient.setServer(server, port);
 }
@@ -57,6 +57,24 @@ void MqttService::connect()
     }
 }
 
+void MqttService::publish(
+    const String& topic,
+    const String& message)
+{
+	if (!_mqttClient.connected())
+	{
+		connect();
+	}
+
+	if (!_mqttClient.connected())
+		return;
+
+
+    _mqttClient.publish(
+        topic.c_str(),
+        message.c_str());
+}
+
 void MqttService::addSubscription(const String& topic)
 {
     if (_subscriptionCount >= MAX_SUBSCRIPTIONS)
@@ -68,14 +86,4 @@ void MqttService::addSubscription(const String& topic)
     {
         _mqttClient.subscribe(topic.c_str());
     }
-}
-
-String MqttService::GetHardwareId()
-{
-    String hardwareId = WiFi.macAddress();
-
-    hardwareId.replace(":", "");
-    hardwareId.toUpperCase();
-
-    return hardwareId;
 }

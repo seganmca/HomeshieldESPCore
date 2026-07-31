@@ -49,19 +49,11 @@ void ProvisioningService::Begin()
     Serial.print("AP IP : ");
     Serial.println(WiFi.softAPIP());
 	
-	_lastHeartbeat = millis();
 }
 
 void ProvisioningService::Loop()
 {
     _server.handleClient();
-	
-	if (millis() - _lastHeartbeat >= HEARTBEAT_INTERVAL)
-	{
-		_lastHeartbeat = millis();
-
-		_httpService.SendHeartbeat();
-	}
 }
 
 void ProvisioningService::ConfigureRoutes()
@@ -172,8 +164,3 @@ void ProvisioningService::ConnectToWifi()
     Serial.print("IP Address : ");
     Serial.println(WiFi.localIP());
 }
-
-bool ProvisioningService::IsConnected() const
-{
-    return WiFi.status() == WL_CONNECTED;
-}	
