@@ -15,11 +15,13 @@ public:
 
     void loop();
 
-	void publish( const String& topic,  const String& message);
+	bool publish( const String& topic,  const String& message);
 
     void addSubscription(const String& topic);
 
     void setCallback(MQTT_CALLBACK_SIGNATURE);
+
+	bool connected();
 
 private:
     void connect();

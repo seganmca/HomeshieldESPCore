@@ -1,4 +1,5 @@
 #include "MqttService.h"
+#include "Debug.h"
 
 MqttService::MqttService()
     : _mqttClient(_wifiClient)
@@ -36,11 +37,11 @@ void MqttService::connect()
 {
     while (!_mqttClient.connected())
     {
-        Serial.print("Connecting MQTT... ");
+        DEBUG_LOG_PRINT("Connecting MQTT... ");
 
         if (_mqttClient.connect(_clientId.c_str()))
         {
-            Serial.println("SUCCESS");
+            DEBUG_LOG("SUCCESS");
 
             for (int i = 0; i < _subscriptionCount; i++)
             {
@@ -49,15 +50,14 @@ void MqttService::connect()
         }
         else
         {
-            Serial.print("FAILED. State=");
-            Serial.println(_mqttClient.state());
+            DEBUG_VALUE("FAILED. State=", _mqttClient.state());
 
             delay(2000);
         }
     }
 }
 
-void MqttService::publish(
+bool MqttService::publish(
     const String& topic,
     const String& message)
 {
@@ -67,10 +67,10 @@ void MqttService::publish(
 	}
 
 	if (!_mqttClient.connected())
-		return;
+		return false;
 
 
-    _mqttClient.publish(
+    return _mqttClient.publish(
         topic.c_str(),
         message.c_str());
 }
@@ -86,4 +86,9 @@ void MqttService::addSubscription(const String& topic)
     {
         _mqttClient.subscribe(topic.c_str());
     }
+}
+
+bool MqttService::connected()
+{
+    return _mqttClient.connected();
 }

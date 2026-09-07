@@ -1,3 +1,4 @@
+#include "Debug.h"
 #include "HttpService.h"
 #include "Configuration.h"
 #include <WiFiClient.h>
@@ -8,11 +9,8 @@ String HttpService::Post(
     const String& url,
     const String& json)
 {
-    //Serial.println("================================");
-    //Serial.println("HTTP POST");
-    Serial.println(url);
-    Serial.println(json);
-    //Serial.println("================================");
+    DEBUG_LOG(url);
+    DEBUG_LOG(json);
 
     HTTPClient client;
 	WiFiClient wifiClient;
@@ -24,12 +22,10 @@ String HttpService::Post(
         "Content-Type",
         "application/json");
 
-	//Serial.println("About to POST...");
     auto status = client.POST(json);
-	Serial.println("POST completed.");
+	DEBUG_LOG("POST completed.");
 
-    Serial.print("HTTP Status : ");
-    Serial.println(status);
+    DEBUG_VALUE("HTTP Status : ", status);
 
     String response;
 
@@ -37,13 +33,11 @@ String HttpService::Post(
     {
         response = client.getString();
 
-        Serial.println("Response:");
-        Serial.println(response);
+        DEBUG_VALUE("Response:", response);
     }
     else
     {
-        Serial.print("HTTP Error : ");
-        Serial.println(client.errorToString(status));
+        DEBUG_VALUE("HTTP Error : ", client.errorToString(status));
     }
 
     client.end();
@@ -51,13 +45,13 @@ String HttpService::Post(
     return response;
 }
 
-String HttpService::RegisterDevice(int deviceType)
+String HttpService::RegisterDevice(const String& deviceType)
 
 {
     String request =
         "{"
         "\"hardwareId\":\"" + DeviceIdentity::GetHardwareId() + "\","
-        "\"deviceType\":" + String(deviceType) + ","
+        "\"deviceType\":\"" + deviceType + "\","
         "\"firmwareVersion\":\"" + String(Configuration::FirmwareVersion) + "\""
         "}";
 

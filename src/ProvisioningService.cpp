@@ -2,6 +2,7 @@
 #include "Configuration.h"
 #include <Arduino.h>
 #include <WiFi.h>
+#include "Debug.h"
 
 ProvisioningService::ProvisioningService(
     StorageService& storageService,
@@ -17,7 +18,7 @@ void ProvisioningService::Begin()
 {
 	if (_storageService.HasWifiCredentials())
 	{
-		Serial.println("WiFi credentials found.");
+		DEBUG_LOG("WiFi credentials found.");
 
 		ConnectToWifi();
 		
@@ -26,28 +27,27 @@ void ProvisioningService::Begin()
 		return;
 	}
 
-    Serial.println("No WiFi credentials.");
+    DEBUG_LOG("No WiFi credentials.");
 
     WiFi.mode(WIFI_AP);
     WiFi.setTxPower(WIFI_POWER_8_5dBm);
 
     if (WiFi.softAP("HomeShield"))
     {
-        Serial.println("Access Point started.");
+        DEBUG_LOG("Access Point started.");
     }
     else
     {
-        Serial.println("Failed to start Access Point.");
+        DEBUG_LOG("Failed to start Access Point.");
     }
 
     ConfigureRoutes();
 
     _server.begin();
 
-    Serial.println("Web server started.");
+    DEBUG_LOG("Web server started.");
 
-    Serial.print("AP IP : ");
-    Serial.println(WiFi.softAPIP());
+    DEBUG_VALUE("AP IP : ", WiFi.softAPIP());
 	
 }
 
@@ -111,11 +111,9 @@ void ProvisioningService::HandleSave()
     auto password =
         _server.arg("password");
 
-    Serial.print("SSID : ");
-    Serial.println(ssid);
+    DEBUG_VALUE("SSID : ", ssid);
 
-    Serial.print("Password : ");
-    Serial.println(password);
+    DEBUG_VALUE("Password : ", password);
 
     _storageService.SaveWifiCredentials(
         ssid,
@@ -139,8 +137,7 @@ void ProvisioningService::ConnectToWifi()
     auto password =
         _storageService.GetWifiPassword();
 
-    Serial.print("Connecting to ");
-    Serial.println(ssid);
+    DEBUG_VALUE("Connecting to ", ssid);
 
     WiFi.mode(WIFI_STA);
     WiFi.setTxPower(WIFI_POWER_8_5dBm);
@@ -154,13 +151,10 @@ void ProvisioningService::ConnectToWifi()
     {
         delay(500);
 
-        Serial.print(".");
+        DEBUG_LOG_PRINT(".");
     }
 
-    Serial.println();
+    DEBUG_LOG("WiFi Connected.");
 
-    Serial.println("WiFi Connected.");
-
-    Serial.print("IP Address : ");
-    Serial.println(WiFi.localIP());
+    DEBUG_VALUE("IP Address : ", WiFi.localIP());
 }

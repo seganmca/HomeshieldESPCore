@@ -10,7 +10,7 @@ public:
 	RegistrationService(
 		StorageService& storageService,
 		HttpService& httpService,
-		int deviceType);
+		const String& deviceType);
 
     void Register();
 
@@ -20,5 +20,5 @@ private:
 
     HttpService& _httpService;
 
-    int _deviceType;
+    String _deviceType;
 };

@@ -2,15 +2,21 @@
 
 namespace DeviceTypes
 {
-    constexpr int DoorSensor = 1;
+    constexpr const char* DoorSensor   = "door-sensor";
 
-    constexpr int TankNode = 2;
+    constexpr const char* TankStateSensor = "float-sensor";
 
-    constexpr int MotorNode = 3;
+    constexpr const char* MotorNode    = "motor-actuator";
 
-    constexpr int Camera = 4;
+    constexpr const char* Camera       = "camera";
 
-    constexpr int Siren = 5;
+    constexpr const char* AiVision       = "ai-vision";
 
-    constexpr int Light = 6;
+    constexpr const char* Siren        = "siren";
+
+    constexpr const char* Light        = "switch";
+
+    constexpr const char* PIR          = "pir-sensor";
+
+    constexpr const char* mmWaveRadar  = "mmwave-radar";
 }

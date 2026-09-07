@@ -1,3 +1,4 @@
+#include "Debug.h"
 #include "HomeShield.h"
 #include <WiFi.h>
 
@@ -5,12 +6,15 @@ HomeShieldClass HomeShield;
 
 HomeShieldClass* HomeShieldClass::_instance = nullptr;
 
-void HomeShieldClass::begin(int deviceType, const String& firmwareVersion)
+void HomeShieldClass::begin(
+    const String& deviceType,
+    const String& firmwareVersion)
 {
     _instance = this;
-	_firmwareVersion = firmwareVersion;
+
+    _firmwareVersion = firmwareVersion;
     _deviceType = deviceType;
-	_lastHeartbeat = 0;
+    _lastHeartbeat = 0;
 
     _registrationService =
         new RegistrationService(
@@ -27,7 +31,6 @@ void HomeShieldClass::begin(int deviceType, const String& firmwareVersion)
     _provisioningService->Begin();
 }
 
-
 void HomeShieldClass::loop()
 {
     _provisioningService->Loop();
@@ -36,34 +39,35 @@ void HomeShieldClass::loop()
         return;
 
     if (!_mqttInitialized)
-    {
-        _mqttService.begin(
-            "192.168.1.11",
-            1883);
+	{
+		_mqttService.begin(
+			"192.168.1.11",
+			1883);
 
-        _mqttService.setCallback(OnMqttMessage);
+		_mqttService.setCallback(OnMqttMessage);
 
-        String topic =
-            "homeshield/device/" +
-            DeviceIdentity::GetHardwareId();
+		String topic =
+			"homeshield/device/" +
+			DeviceIdentity::GetHardwareId();
 
-        _mqttService.addSubscription(topic);
+		_mqttService.addSubscription(topic);
 
-        _mqttInitialized = true;
-		
-		publishHeartbeat();
+		_mqttInitialized = true;
 
 		_lastHeartbeat = millis();
-    }
+	}
 
-    _mqttService.loop();
+	_mqttService.loop();
 
-    if (millis() - _lastHeartbeat >= HEARTBEAT_INTERVAL)
-    {
-        publishHeartbeat();
+	if (MqttConnected())
+	{
+		if (millis() - _lastHeartbeat >= HEARTBEAT_INTERVAL)
+		{
+			publishHeartbeat();
 
-        _lastHeartbeat = millis();
-    }
+			_lastHeartbeat = millis();
+		}
+	}
 }
 
 void HomeShieldClass::setCommandHandler(
@@ -87,15 +91,21 @@ void HomeShieldClass::OnMqttMessage(
 
     if (_instance->_commandHandler)
     {
+		DEBUG_VALUE("Command Received: ", message);
         _instance->_commandHandler(message);
     }
 }
 
-void HomeShieldClass::publish(
+bool HomeShieldClass::publish(
     const String& topic,
     const String& message)
 {
-    _mqttService.publish(
+    if (!MqttConnected())
+        return false;
+
+    DEBUG_VALUE("Publishing event :", message);
+
+    return _mqttService.publish(
         topic,
         message);
 }
@@ -124,4 +134,9 @@ void HomeShieldClass::publishHeartbeat()
     publish(
         "homeshield/events",
         request);
+}
+
+bool HomeShieldClass::MqttConnected()
+{
+    return _mqttInitialized && _mqttService.connected();
 }

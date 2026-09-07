@@ -13,7 +13,7 @@ public:
 		
 	String PostDeviceState(int state);
 	String SendHeartbeat();
-	String RegisterDevice(int deviceType);
+	String RegisterDevice(const String& deviceType);
 	String GetHardwareId();
 	
 };
