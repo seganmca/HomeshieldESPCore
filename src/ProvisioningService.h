@@ -40,6 +40,11 @@ private:
 
 	void HandleScan();
 
+	void RunInitialScan();
+
+	String BuildScanJson(
+		int count);
+
 	void HandleStatus();
 
 	void HandleCaptiveRedirect();
@@ -68,6 +73,10 @@ private:
 	bool _portalActive = false;
 
 	ProvisioningState _state = ProvisioningState::Idle;
+
+	String _scanJson;
+
+	bool _scanPending = false;
 
 	String _pendingSsid;
 

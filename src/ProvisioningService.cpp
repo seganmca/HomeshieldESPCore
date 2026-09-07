@@ -199,7 +199,7 @@ function bars(r){var n=r>=-55?4:r>=-65?3:r>=-75?2:1,h="";for(var i=1;i<=4;i++)h+
 function esc(s){return s.replace(/[&<>"]/g,function(c){return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]})}
 function scan(){
   $("list").innerHTML='<div style="padding:14px;color:#64748b;font-size:14px">Scanning&hellip;</div>';
-  fetch("/scan").then(function(r){return r.json()}).then(function(d){
+  fetch("/scan"+(arguments[0]?"?refresh=1":"")).then(function(r){return r.json()}).then(function(d){
     if(d.status==="scanning"){setTimeout(scan,1200);return}
     var n=d.networks||[];
     if(!n.length){$("list").innerHTML='<div style="padding:14px;color:#64748b;font-size:14px">No networks found. Tap Rescan or enter the name manually.</div>';return}
@@ -258,7 +258,6 @@ ProvisioningService::ProvisioningService(
 
 void ProvisioningService::Begin()
 {
-/*
 	if (_storageService.HasWifiCredentials())
 	{
 		DEBUG_LOG("WiFi credentials found.");
@@ -269,7 +268,7 @@ void ProvisioningService::Begin()
 
 		return;
 	}
-*/
+
     DEBUG_LOG("No WiFi credentials.");
 
 	StartCaptivePortal();
@@ -278,6 +277,8 @@ void ProvisioningService::Begin()
 void ProvisioningService::StartCaptivePortal()
 {
     WiFi.persistent(false);
+
+    RunInitialScan();
 
     // Stay in AP-only mode while the phone is associating and running its
     // captive-portal probe. Enabling STA (or scanning) makes the radio hop
@@ -475,43 +476,20 @@ void ProvisioningService::HandleRoot()
         200,
         "text/html",
         PortalPage);
+
+    DEBUG_VALUE("[PORTAL] served setup page, bytes", strlen_P(PortalPage));
+
+    DEBUG_VALUE("[PORTAL] client still connected", _server.client().connected());
 }
 
-void ProvisioningService::HandleScan()
+String ProvisioningService::BuildScanJson(
+    int count)
 {
-    LogRequest("scan");
-
-    auto result = WiFi.scanComplete();
-
-    if (result == WIFI_SCAN_RUNNING)
-    {
-        _server.send(200, "application/json", "{\"status\":\"scanning\"}");
-
-        return;
-    }
-
-    if (result == WIFI_SCAN_FAILED)
-    {
-        // Scanning needs the station interface; it is only brought up once the
-        // portal page is actually open, so the AP stays stable during the
-        // phone's captive-portal probe.
-        if (WiFi.getMode() != WIFI_AP_STA)
-        {
-            WiFi.mode(WIFI_AP_STA);
-        }
-
-        WiFi.scanNetworks(true, false);
-
-        _server.send(200, "application/json", "{\"status\":\"scanning\"}");
-
-        return;
-    }
-
     String json = "{\"status\":\"done\",\"networks\":[";
 
-    auto count = result > 20 ? 20 : result;
+    auto limit = count > 20 ? 20 : count;
 
-    for (int i = 0; i < count; i++)
+    for (int i = 0; i < limit; i++)
     {
         auto ssid = WiFi.SSID(i);
 
@@ -534,7 +512,78 @@ void ProvisioningService::HandleScan()
 
     WiFi.scanDelete();
 
-    _server.send(200, "application/json", json);
+    return json;
+}
+
+void ProvisioningService::RunInitialScan()
+{
+    // Scan once, before the AP is advertised and before any phone has joined.
+    //
+    // A scan puts the radio into station mode and makes it hop channels, which
+    // knocks associated clients off the SoftAP for several seconds. Doing it
+    // here means the phone never sees that: by the time it associates, the
+    // network list is already cached and /scan answers instantly from memory.
+    WiFi.mode(WIFI_AP_STA);
+
+    auto count = WiFi.scanNetworks(false, false);
+
+    DEBUG_VALUE("[PORTAL] initial scan networks", count);
+
+    _scanJson =
+        count > 0
+            ? BuildScanJson(count)
+            : String("{\"status\":\"done\",\"networks\":[]}");
+
+    WiFi.mode(WIFI_AP);
+}
+
+void ProvisioningService::HandleScan()
+{
+    LogRequest("scan");
+
+    auto result = WiFi.scanComplete();
+
+    if (result == WIFI_SCAN_RUNNING)
+    {
+        _server.send(200, "application/json", "{\"status\":\"scanning\"}");
+
+        return;
+    }
+
+    // A rescan finished - refresh the cache from it.
+    if (_scanPending && result >= 0)
+    {
+        _scanJson = BuildScanJson(result);
+
+        _scanPending = false;
+
+        WiFi.mode(WIFI_AP);
+    }
+
+    // An explicit "Rescan" from the page is the only thing that disturbs the
+    // radio once a phone is connected, and the page tolerates the brief drop.
+    if (_server.hasArg("refresh") && !_scanPending)
+    {
+        if (WiFi.getMode() != WIFI_AP_STA)
+        {
+            WiFi.mode(WIFI_AP_STA);
+        }
+
+        WiFi.scanNetworks(true, false);
+
+        _scanPending = true;
+
+        _server.send(200, "application/json", "{\"status\":\"scanning\"}");
+
+        return;
+    }
+
+    if (_scanJson.length() == 0)
+    {
+        _scanJson = "{\"status\":\"done\",\"networks\":[]}";
+    }
+
+    _server.send(200, "application/json", _scanJson);
 }
 
 void ProvisioningService::HandleStatus()
