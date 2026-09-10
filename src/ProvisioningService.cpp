@@ -1,87 +1,109 @@
 #include "ProvisioningService.h"
 #include "Configuration.h"
+
 #include <Arduino.h>
 #include <WiFi.h>
 #include <esp_wifi.h>
 #include <esp_netif.h>
+
 #include "Debug.h"
 
 namespace
 {
-	const IPAddress PortalIp(192, 168, 4, 1);
+    const IPAddress PortalIp(
+        192, 168, 4, 1);
 
-	const IPAddress PortalGateway(192, 168, 4, 1);
+    const IPAddress PortalGateway(
+        192, 168, 4, 1);
 
-	const IPAddress PortalSubnet(255, 255, 255, 0);
+    const IPAddress PortalSubnet(
+        255, 255, 255, 0);
 
-	// The ESP32 SoftAP DHCP server does not advertise a DNS server by default.
-	// Without DHCP option 6 the phone has no resolver on the provisioning
-	// network, so its captive-portal probe never resolves and no portal is
-	// detected - the page can then only be reached by typing the IP.
-	// Point the offered DNS server at ourselves so the probe hits our DNS
-	// server and gets redirected.
-	void EnableApDnsOffer(
-		const IPAddress& apIp)
-	{
-		auto netif =
-			esp_netif_get_handle_from_ifkey("WIFI_AP_DEF");
 
-		if (netif == nullptr)
-		{
-			DEBUG_LOG("[PORTAL] AP netif NOT FOUND - DNS offer not configured.");
+    void EnableApDnsOffer(
+        const IPAddress& apIp)
+    {
+        auto netif =
+            esp_netif_get_handle_from_ifkey(
+                "WIFI_AP_DEF");
 
-			return;
-		}
+        if (netif == nullptr)
+        {
+            DEBUG_LOG(
+                "[PORTAL] AP netif NOT FOUND - DNS offer not configured.");
 
-		esp_netif_dns_info_t dns = {};
+            return;
+        }
 
-		dns.ip.type = ESP_IPADDR_TYPE_V4;
+        esp_netif_dns_info_t dns = {};
 
-		dns.ip.u_addr.ip4.addr = static_cast<uint32_t>(apIp);
+        dns.ip.type =
+            ESP_IPADDR_TYPE_V4;
 
-		auto stopResult =
-			esp_netif_dhcps_stop(netif);
+        dns.ip.u_addr.ip4.addr =
+            static_cast<uint32_t>(apIp);
 
-		DEBUG_VALUE("[PORTAL] dhcps_stop", esp_err_to_name(stopResult));
+        auto stopResult =
+            esp_netif_dhcps_stop(netif);
 
-		// DHCPS_OFFER_DNS
-		uint8_t offerDns = 0x02;
+        DEBUG_VALUE(
+            "[PORTAL] dhcps_stop",
+            esp_err_to_name(stopResult));
 
-		auto optionResult =
-			esp_netif_dhcps_option(
-				netif,
-				ESP_NETIF_OP_SET,
-				ESP_NETIF_DOMAIN_NAME_SERVER,
-				&offerDns,
-				sizeof(offerDns));
+        uint8_t offerDns = 0x02;
 
-		DEBUG_VALUE("[PORTAL] dhcps_option(DNS)", esp_err_to_name(optionResult));
+        auto optionResult =
+            esp_netif_dhcps_option(
+                netif,
+                ESP_NETIF_OP_SET,
+                ESP_NETIF_DOMAIN_NAME_SERVER,
+                &offerDns,
+                sizeof(offerDns));
 
-		auto dnsResult =
-			esp_netif_set_dns_info(netif, ESP_NETIF_DNS_MAIN, &dns);
+        DEBUG_VALUE(
+            "[PORTAL] dhcps_option(DNS)",
+            esp_err_to_name(optionResult));
 
-		DEBUG_VALUE("[PORTAL] set_dns_info", esp_err_to_name(dnsResult));
+        auto dnsResult =
+            esp_netif_set_dns_info(
+                netif,
+                ESP_NETIF_DNS_MAIN,
+                &dns);
 
-		auto startResult =
-			esp_netif_dhcps_start(netif);
+        DEBUG_VALUE(
+            "[PORTAL] set_dns_info",
+            esp_err_to_name(dnsResult));
 
-		DEBUG_VALUE("[PORTAL] dhcps_start", esp_err_to_name(startResult));
+        auto startResult =
+            esp_netif_dhcps_start(netif);
 
-		esp_netif_dns_info_t readBack = {};
+        DEBUG_VALUE(
+            "[PORTAL] dhcps_start",
+            esp_err_to_name(startResult));
 
-		if (esp_netif_get_dns_info(netif, ESP_NETIF_DNS_MAIN, &readBack) == ESP_OK)
-		{
-			IPAddress offered(readBack.ip.u_addr.ip4.addr);
+        esp_netif_dns_info_t readBack = {};
 
-			DEBUG_VALUE("[PORTAL] DHCP will offer DNS", offered);
-		}
-		else
-		{
-			DEBUG_LOG("[PORTAL] Could not read back AP DNS info.");
-		}
-	}
+        if (esp_netif_get_dns_info(
+                netif,
+                ESP_NETIF_DNS_MAIN,
+                &readBack) == ESP_OK)
+        {
+            IPAddress offered(
+                readBack.ip.u_addr.ip4.addr);
 
-	const char PortalPage[] PROGMEM = R"HTML(<!DOCTYPE html>
+            DEBUG_VALUE(
+                "[PORTAL] DHCP will offer DNS",
+                offered);
+        }
+        else
+        {
+            DEBUG_LOG(
+                "[PORTAL] Could not read back AP DNS info.");
+        }
+    }
+
+
+    const char PortalPage[] PROGMEM = R"HTML(<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -191,88 +213,227 @@ button.go:disabled{opacity:.55}
 
   <p class="foot">HomeShield device setup &middot; 192.168.4.1</p>
 </div>
+
 <script>
 var sel="", open=false, poll=null;
-function $(i){return document.getElementById(i)}
-function show(id){["form","busy","done","fail"].forEach(function(x){$(x).classList.toggle("hide",x!==id)})}
-function bars(r){var n=r>=-55?4:r>=-65?3:r>=-75?2:1,h="";for(var i=1;i<=4;i++)h+='<i class="'+(i<=n?"on":"")+'"></i>';return '<span class="bars">'+h+'</span>'}
-function esc(s){return s.replace(/[&<>"]/g,function(c){return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]})}
+
+function $(i){
+  return document.getElementById(i)
+}
+
+function show(id){
+  ["form","busy","done","fail"].forEach(function(x){
+    $(x).classList.toggle("hide",x!==id)
+  })
+}
+
+function bars(r){
+  var n=r>=-55?4:r>=-65?3:r>=-75?2:1,h="";
+  for(var i=1;i<=4;i++)
+    h+='<i class="'+(i<=n?"on":"")+'"></i>';
+  return '<span class="bars">'+h+'</span>'
+}
+
+function esc(s){
+  return s.replace(/[&<>"]/g,function(c){
+    return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]
+  })
+}
+
 function scan(){
   $("list").innerHTML='<div style="padding:14px;color:#64748b;font-size:14px">Scanning&hellip;</div>';
-  fetch("/scan"+(arguments[0]?"?refresh=1":"")).then(function(r){return r.json()}).then(function(d){
-    if(d.status==="scanning"){setTimeout(scan,1200);return}
-    var n=d.networks||[];
-    if(!n.length){$("list").innerHTML='<div style="padding:14px;color:#64748b;font-size:14px">No networks found. Tap Rescan or enter the name manually.</div>';return}
-    $("list").innerHTML=n.map(function(x){
-      return '<button type="button" class="net'+(x.ssid===sel?" sel":"")+'" data-s="'+esc(x.ssid)+'"><span class="nm">'+esc(x.ssid)+'</span><span class="mt">'+(x.secure?"&#128274;":"")+bars(x.rssi)+'</span></button>'
-    }).join("");
-    Array.prototype.forEach.call($("list").querySelectorAll(".net"),function(b){
-      b.onclick=function(){sel=b.getAttribute("data-s");$("ssid").value=sel;$("err").textContent="";
-        Array.prototype.forEach.call($("list").querySelectorAll(".net"),function(o){o.classList.remove("sel")});
-        b.classList.add("sel");$("pwd").focus()}
-    });
-  }).catch(function(){setTimeout(scan,2000)});
+
+  fetch("/scan"+(arguments[0]?"?refresh=1":""))
+    .then(function(r){return r.json()})
+    .then(function(d){
+      if(d.status==="scanning"){
+        setTimeout(scan,1200);
+        return
+      }
+
+      var n=d.networks||[];
+
+      if(!n.length){
+        $("list").innerHTML='<div style="padding:14px;color:#64748b;font-size:14px">No networks found. Tap Rescan or enter the name manually.</div>';
+        return
+      }
+
+      $("list").innerHTML=n.map(function(x){
+        return '<button type="button" class="net'+
+          (x.ssid===sel?" sel":"")+
+          '" data-s="'+esc(x.ssid)+'"><span class="nm">'+
+          esc(x.ssid)+
+          '</span><span class="mt">'+
+          (x.secure?"&#128274;":"")+
+          bars(x.rssi)+
+          '</span></button>'
+      }).join("");
+
+      Array.prototype.forEach.call(
+        $("list").querySelectorAll(".net"),
+        function(b){
+          b.onclick=function(){
+            sel=b.getAttribute("data-s");
+            $("ssid").value=sel;
+            $("err").textContent="";
+
+            Array.prototype.forEach.call(
+              $("list").querySelectorAll(".net"),
+              function(o){
+                o.classList.remove("sel")
+              });
+
+            b.classList.add("sel");
+            $("pwd").focus()
+          }
+        });
+    })
+    .catch(function(){
+      setTimeout(scan,2000)
+    })
 }
+
 $("rescan").onclick=scan;
-$("manual").onclick=function(){$("ssidRow").classList.remove("hide");$("manualHint").classList.add("hide");$("ssid").focus()};
-$("toggle").onclick=function(){open=!open;$("pwd").type=open?"text":"password";$("toggle").textContent=open?"Hide":"Show"};
-$("retry").onclick=function(){show("form");scan()};
+
+$("manual").onclick=function(){
+  $("ssidRow").classList.remove("hide");
+  $("manualHint").classList.add("hide");
+  $("ssid").focus()
+};
+
+$("toggle").onclick=function(){
+  open=!open;
+  $("pwd").type=open?"text":"password";
+  $("toggle").textContent=open?"Hide":"Show"
+};
+
+$("retry").onclick=function(){
+  show("form");
+  scan()
+};
+
 $("go").onclick=function(){
   var s=$("ssid").value||sel;
-  if(!s){$("err").textContent="Select a network or enter its name.";return}
-  $("go").disabled=true;$("err").textContent="";
-  var b="ssid="+encodeURIComponent(s)+"&password="+encodeURIComponent($("pwd").value);
-  fetch("/save",{method:"POST",headers:{"Content-Type":"application/x-www-form-urlencoded"},body:b})
-   .then(function(){show("busy");$("bm").textContent='Joining "'+s+'". This can take up to half a minute.';track()})
-   .catch(function(){$("go").disabled=false;$("err").textContent="Could not reach the device. Please try again."});
-};
-function track(){
-  if(poll)clearInterval(poll);
-  var misses=0;
-  poll=setInterval(function(){
-    fetch("/status",{cache:"no-store"}).then(function(r){return r.json()}).then(function(d){
-      misses=0;
-      if(d.state==="connected"){clearInterval(poll);$("dm").textContent="Your device joined \""+d.ssid+"\" and is restarting. You can reconnect your phone to your normal network.";show("done")}
-      else if(d.state==="failed"){clearInterval(poll);$("fm").textContent=d.reason||"Please check the password and try again.";$("go").disabled=false;show("fail")}
-    }).catch(function(){
-      misses++;
-      if(misses>12){clearInterval(poll);$("dm").textContent="The device left setup mode, which usually means it joined your Wi-Fi. Reconnect your phone to your normal network.";show("done")}
+
+  if(!s){
+    $("err").textContent="Select a network or enter its name.";
+    return
+  }
+
+  $("go").disabled=true;
+  $("err").textContent="";
+
+  var b=
+    "ssid="+encodeURIComponent(s)+
+    "&password="+encodeURIComponent($("pwd").value);
+
+  fetch(
+    "/save",
+    {
+      method:"POST",
+      headers:{
+        "Content-Type":
+          "application/x-www-form-urlencoded"
+      },
+      body:b
+    })
+    .then(function(){
+      show("busy");
+      $("bm").textContent=
+        'Joining "'+s+'". This can take up to half a minute.';
+      track()
+    })
+    .catch(function(){
+      $("go").disabled=false;
+      $("err").textContent=
+        "Could not reach the device. Please try again."
     });
-  },1500);
+};
+
+function track(){
+  if(poll)
+    clearInterval(poll);
+
+  var misses=0;
+
+  poll=setInterval(function(){
+    fetch(
+      "/status",
+      {
+        cache:"no-store"
+      })
+      .then(function(r){
+        return r.json()
+      })
+      .then(function(d){
+        misses=0;
+
+        if(d.state==="connected"){
+          clearInterval(poll);
+
+          $("dm").textContent=
+            "Your device joined \""+
+            d.ssid+
+            "\" and is restarting. Reconnect your phone to your normal network.";
+
+          show("done")
+        }
+        else if(d.state==="failed"){
+          clearInterval(poll);
+
+          $("fm").textContent=
+            d.reason||
+            "Please check the password and try again.";
+
+          $("go").disabled=false;
+          show("fail")
+        }
+      })
+      .catch(function(){
+        misses++;
+
+        if(misses>12){
+          clearInterval(poll);
+
+          $("dm").textContent=
+            "The device left setup mode, which usually means it joined your Wi-Fi. Reconnect your phone to your normal network.";
+
+          show("done")
+        }
+      });
+  },1500)
 }
+
 scan();
 </script>
 </body>
 </html>)HTML";
 }
 
+
 ProvisioningService::ProvisioningService(
-    StorageService& storageService,
-	HttpService& httpService,
-    RegistrationService& registrationService)
-    : _storageService(storageService),
-	  _httpService(httpService),
-      _registrationService(registrationService)
+    StorageService& storageService)
+    : _storageService(storageService)
 {
 }
+
 
 void ProvisioningService::Begin()
 {
-	if (_storageService.HasWifiCredentials())
-	{
-		DEBUG_LOG("WiFi credentials found.");
+    if (_storageService.HasWifiCredentials())
+    {
+        DEBUG_LOG("WiFi credentials found.");
 
-		ConnectToWifi();
-		
-		_registrationService.Register();
+        ConnectToWifi();
 
-		return;
-	}
+        return;
+    }
 
     DEBUG_LOG("No WiFi credentials.");
 
-	StartCaptivePortal();
+    StartCaptivePortal();
 }
+
 
 void ProvisioningService::StartCaptivePortal()
 {
@@ -280,13 +441,10 @@ void ProvisioningService::StartCaptivePortal()
 
     RunInitialScan();
 
-    // Stay in AP-only mode while the phone is associating and running its
-    // captive-portal probe. Enabling STA (or scanning) makes the radio hop
-    // channels, which stalls the AP for seconds at exactly the moment the
-    // probe is sent. Scanning enables STA on demand from /scan instead.
     WiFi.mode(WIFI_AP);
 
-    WiFi.setTxPower(WIFI_POWER_8_5dBm);
+    WiFi.setTxPower(
+        WIFI_POWER_8_5dBm);
 
     WiFi.softAPConfig(
         PortalIp,
@@ -295,48 +453,68 @@ void ProvisioningService::StartCaptivePortal()
 
     if (WiFi.softAP(ApSsid))
     {
-        DEBUG_LOG("Access Point started.");
+        DEBUG_LOG(
+            "Access Point started.");
     }
     else
     {
-        DEBUG_LOG("Failed to start Access Point.");
+        DEBUG_LOG(
+            "Failed to start Access Point.");
     }
 
     delay(200);
 
-    EnableApDnsOffer(WiFi.softAPIP());
+    EnableApDnsOffer(
+        WiFi.softAPIP());
 
     _dnsServer.setTTL(0);
 
-    _dnsServer.setErrorReplyCode(DNSReplyCode::NoError);
+    _dnsServer.setErrorReplyCode(
+        DNSReplyCode::NoError);
 
-    if (_dnsServer.start(DnsPort, "*", WiFi.softAPIP()))
+    if (_dnsServer.start(
+            DnsPort,
+            "*",
+            WiFi.softAPIP()))
     {
-        DEBUG_LOG("DNS server started.");
+        DEBUG_LOG(
+            "DNS server started.");
     }
     else
     {
-        DEBUG_LOG("Failed to start DNS server.");
+        DEBUG_LOG(
+            "Failed to start DNS server.");
     }
 
     ConfigureRoutes();
 
-    static const char* headerKeys[] = { "User-Agent" };
+    static const char* headerKeys[] =
+    {
+        "User-Agent"
+    };
 
-    _server.collectHeaders(headerKeys, 1);
+    _server.collectHeaders(
+        headerKeys,
+        1);
 
     _server.begin();
 
     _portalActive = true;
 
-    _state = ProvisioningState::Idle;
+    _state =
+        ProvisioningState::Idle;
 
-    DEBUG_LOG("Web server started.");
+    DEBUG_LOG(
+        "Web server started.");
 
-    DEBUG_VALUE("AP IP : ", WiFi.softAPIP());
+    DEBUG_VALUE(
+        "AP IP : ",
+        WiFi.softAPIP());
 
-    DEBUG_LOG("[PORTAL] Waiting for a phone to join and probe...");
+    DEBUG_LOG(
+        "[PORTAL] Waiting for a phone to join and probe...");
 }
+
 
 void ProvisioningService::Loop()
 {
@@ -352,12 +530,15 @@ void ProvisioningService::Loop()
     {
         _lastPortalLog = millis();
 
-        DEBUG_VALUE("[PORTAL] clients associated", WiFi.softAPgetStationNum());
+        DEBUG_VALUE(
+            "[PORTAL] clients associated",
+            WiFi.softAPgetStationNum());
     }
 #endif
 
     UpdateConnectionAttempt();
 }
+
 
 void ProvisioningService::ConfigureRoutes()
 {
@@ -368,64 +549,65 @@ void ProvisioningService::ConfigureRoutes()
             HandleRoot();
         });
 
-	_server.on(
-		"/save",
-		HTTP_POST,
-		[this]()
-		{
-			HandleSave();
-		});
 
-	_server.on(
-		"/scan",
-		[this]()
-		{
-			HandleScan();
-		});
+    _server.on(
+        "/save",
+        HTTP_POST,
+        [this]()
+        {
+            HandleSave();
+        });
 
-	_server.on(
-		"/status",
-		[this]()
-		{
-			HandleStatus();
-		});
 
-	// Captive portal detection endpoints.
-	//
-	// Android  : /generate_204, /gen_204
-	// iOS/macOS: /hotspot-detect.html, /library/test/success.html
-	// Windows  : /connecttest.txt, /ncsi.txt, /redirect
-	//
-	const char* detectionPaths[] =
-	{
-		"/generate_204",
-		"/gen_204",
-		"/hotspot-detect.html",
-		"/library/test/success.html",
-		"/connecttest.txt",
-		"/ncsi.txt",
-		"/redirect",
-		"/fwlink",
-		"/canonical.html",
-		"/success.txt"
-	};
+    _server.on(
+        "/scan",
+        [this]()
+        {
+            HandleScan();
+        });
 
-	for (auto path : detectionPaths)
-	{
-		_server.on(
-			path,
-			[this]()
-			{
-				HandleCaptiveRedirect();
-			});
-	}
 
-	_server.onNotFound(
-		[this]()
-		{
-			HandleCaptiveRedirect();
-		});
+    _server.on(
+        "/status",
+        [this]()
+        {
+            HandleStatus();
+        });
+
+
+    const char* detectionPaths[] =
+    {
+        "/generate_204",
+        "/gen_204",
+        "/hotspot-detect.html",
+        "/library/test/success.html",
+        "/connecttest.txt",
+        "/ncsi.txt",
+        "/redirect",
+        "/fwlink",
+        "/canonical.html",
+        "/success.txt"
+    };
+
+
+    for (auto path : detectionPaths)
+    {
+        _server.on(
+            path,
+            [this]()
+            {
+                HandleCaptiveRedirect();
+            });
+    }
+
+
+    _server.onNotFound(
+        [this]()
+        {
+            HandleCaptiveRedirect();
+        });
 }
+
 
 void ProvisioningService::LogRequest(
     const char* tag)
@@ -434,77 +616,103 @@ void ProvisioningService::LogRequest(
     Serial.print("[PORTAL] ");
     Serial.print(tag);
     Serial.print(" method=");
-    Serial.print(_server.method() == HTTP_GET ? "GET" : _server.method() == HTTP_POST ? "POST" : "OTHER");
+
+    Serial.print(
+        _server.method() == HTTP_GET
+            ? "GET"
+            : _server.method() == HTTP_POST
+                ? "POST"
+                : "OTHER");
+
     Serial.print(" host=");
-    Serial.print(_server.hostHeader());
+    Serial.print(
+        _server.hostHeader());
+
     Serial.print(" uri=");
-    Serial.print(_server.uri());
+    Serial.print(
+        _server.uri());
+
     Serial.print(" ua=");
-    Serial.println(_server.header("User-Agent"));
+    Serial.println(
+        _server.header(
+            "User-Agent"));
 #else
     (void)tag;
 #endif
 }
 
+
 void ProvisioningService::HandleCaptiveRedirect()
 {
     LogRequest("probe");
 
-    // Android's NetworkMonitor and Apple's Captive Network Assistant decide a
-    // portal exists by fetching a known URL and comparing the result with what
-    // they expect (an empty HTTP 204 for Android, a short "Success" page for
-    // Apple). Anything else means "a portal is intercepting this network".
-    //
-    // Returning the setup page itself, with a 200, is the most reliable answer:
-    // the probe result is unambiguous and the sign-in window the phone opens is
-    // pointed at this very URL, so it immediately renders the setup UI. A 302
-    // is also legal here, but it relies on the phone's mini-browser following
-    // the redirect before it will show anything - which is where this was
-    // failing.
     HandleRoot();
 }
+
 
 void ProvisioningService::HandleRoot()
 {
     LogRequest("root");
 
-    _server.sendHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+    _server.sendHeader(
+        "Cache-Control",
+        "no-cache, no-store, must-revalidate");
 
-    _server.sendHeader("Pragma", "no-cache");
+    _server.sendHeader(
+        "Pragma",
+        "no-cache");
 
     _server.send_P(
         200,
         "text/html",
         PortalPage);
 
-    DEBUG_VALUE("[PORTAL] served setup page, bytes", strlen_P(PortalPage));
+    DEBUG_VALUE(
+        "[PORTAL] served setup page, bytes",
+        strlen_P(PortalPage));
 
-    DEBUG_VALUE("[PORTAL] client still connected", _server.client().connected());
+    DEBUG_VALUE(
+        "[PORTAL] client still connected",
+        _server.client().connected());
 }
+
 
 String ProvisioningService::BuildScanJson(
     int count)
 {
-    String json = "{\"status\":\"done\",\"networks\":[";
+    String json =
+        "{\"status\":\"done\",\"networks\":[";
 
-    auto limit = count > 20 ? 20 : count;
+    auto limit =
+        count > 20
+            ? 20
+            : count;
+
+    bool first = true;
 
     for (int i = 0; i < limit; i++)
     {
-        auto ssid = WiFi.SSID(i);
+        auto ssid =
+            WiFi.SSID(i);
 
         if (ssid.length() == 0)
             continue;
 
-        if (json.endsWith("}"))
+        if (!first)
             json += ",";
+
+        first = false;
 
         json += "{\"ssid\":\"";
         json += Escape(ssid);
         json += "\",\"rssi\":";
         json += String(WiFi.RSSI(i));
         json += ",\"secure\":";
-        json += WiFi.encryptionType(i) == WIFI_AUTH_OPEN ? "false" : "true";
+        json +=
+            WiFi.encryptionType(i)
+                == WIFI_AUTH_OPEN
+                    ? "false"
+                    : "true";
         json += "}";
     }
 
@@ -515,85 +723,114 @@ String ProvisioningService::BuildScanJson(
     return json;
 }
 
+
 void ProvisioningService::RunInitialScan()
 {
-    // Scan once, before the AP is advertised and before any phone has joined.
-    //
-    // A scan puts the radio into station mode and makes it hop channels, which
-    // knocks associated clients off the SoftAP for several seconds. Doing it
-    // here means the phone never sees that: by the time it associates, the
-    // network list is already cached and /scan answers instantly from memory.
-    WiFi.mode(WIFI_AP_STA);
+    WiFi.mode(
+        WIFI_AP_STA);
 
-    auto count = WiFi.scanNetworks(false, false);
+    auto count =
+        WiFi.scanNetworks(
+            false,
+            false);
 
-    DEBUG_VALUE("[PORTAL] initial scan networks", count);
+    DEBUG_VALUE(
+        "[PORTAL] initial scan networks",
+        count);
 
     _scanJson =
         count > 0
             ? BuildScanJson(count)
-            : String("{\"status\":\"done\",\"networks\":[]}");
+            : String(
+                "{\"status\":\"done\",\"networks\":[]}");
 
     WiFi.mode(WIFI_AP);
 }
+
 
 void ProvisioningService::HandleScan()
 {
     LogRequest("scan");
 
-    auto result = WiFi.scanComplete();
+    auto result =
+        WiFi.scanComplete();
 
-    if (result == WIFI_SCAN_RUNNING)
+    if (result ==
+        WIFI_SCAN_RUNNING)
     {
-        _server.send(200, "application/json", "{\"status\":\"scanning\"}");
+        _server.send(
+            200,
+            "application/json",
+            "{\"status\":\"scanning\"}");
 
         return;
     }
 
-    // A rescan finished - refresh the cache from it.
-    if (_scanPending && result >= 0)
+
+    if (_scanPending &&
+        result >= 0)
     {
-        _scanJson = BuildScanJson(result);
+        _scanJson =
+            BuildScanJson(result);
 
         _scanPending = false;
 
         WiFi.mode(WIFI_AP);
     }
 
-    // An explicit "Rescan" from the page is the only thing that disturbs the
-    // radio once a phone is connected, and the page tolerates the brief drop.
-    if (_server.hasArg("refresh") && !_scanPending)
+
+    if (_server.hasArg("refresh") &&
+        !_scanPending)
     {
-        if (WiFi.getMode() != WIFI_AP_STA)
+        if (WiFi.getMode() !=
+            WIFI_AP_STA)
         {
-            WiFi.mode(WIFI_AP_STA);
+            WiFi.mode(
+                WIFI_AP_STA);
         }
 
-        WiFi.scanNetworks(true, false);
+        WiFi.scanNetworks(
+            true,
+            false);
 
         _scanPending = true;
 
-        _server.send(200, "application/json", "{\"status\":\"scanning\"}");
+        _server.send(
+            200,
+            "application/json",
+            "{\"status\":\"scanning\"}");
 
         return;
     }
 
+
     if (_scanJson.length() == 0)
     {
-        _scanJson = "{\"status\":\"done\",\"networks\":[]}";
+        _scanJson =
+            "{\"status\":\"done\",\"networks\":[]}";
     }
 
-    _server.send(200, "application/json", _scanJson);
+    _server.send(
+        200,
+        "application/json",
+        _scanJson);
 }
+
 
 void ProvisioningService::HandleStatus()
 {
     LogRequest("status");
 
-    _server.sendHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+    _server.sendHeader(
+        "Cache-Control",
+        "no-cache, no-store, must-revalidate");
 
-    _server.send(200, "application/json", BuildStatusJson());
+    _server.send(
+        200,
+        "application/json",
+        BuildStatusJson());
 }
+
 
 String ProvisioningService::BuildStatusJson()
 {
@@ -601,30 +838,59 @@ String ProvisioningService::BuildStatusJson()
 
     switch (_state)
     {
-        case ProvisioningState::Connecting: state = "connecting"; break;
-        case ProvisioningState::Connected:  state = "connected";  break;
-        case ProvisioningState::Failed:     state = "failed";     break;
-        default: break;
+        case ProvisioningState::Connecting:
+            state = "connecting";
+            break;
+
+        case ProvisioningState::Connected:
+            state = "connected";
+            break;
+
+        case ProvisioningState::Failed:
+            state = "failed";
+            break;
+
+        default:
+            break;
     }
 
-    String json = "{\"state\":\"" + state + "\"";
 
-    json += ",\"ssid\":\"" + Escape(_pendingSsid) + "\"";
+    String json =
+        "{\"state\":\"" +
+        state +
+        "\"";
 
-    if (_state == ProvisioningState::Connected)
+    json +=
+        ",\"ssid\":\"" +
+        Escape(_pendingSsid) +
+        "\"";
+
+
+    if (_state ==
+        ProvisioningState::Connected)
     {
-        json += ",\"ip\":\"" + WiFi.localIP().toString() + "\"";
+        json +=
+            ",\"ip\":\"" +
+            WiFi.localIP().toString() +
+            "\"";
     }
 
-    if (_state == ProvisioningState::Failed)
+
+    if (_state ==
+        ProvisioningState::Failed)
     {
-        json += ",\"reason\":\"" + Escape(_failureReason) + "\"";
+        json +=
+            ",\"reason\":\"" +
+            Escape(_failureReason) +
+            "\"";
     }
+
 
     json += "}";
 
     return json;
 }
+
 
 void ProvisioningService::HandleSave()
 {
@@ -636,9 +902,14 @@ void ProvisioningService::HandleSave()
     auto password =
         _server.arg("password");
 
-    DEBUG_VALUE("SSID : ", ssid);
+    DEBUG_VALUE(
+        "SSID : ",
+        ssid);
 
-    DEBUG_VALUE("Password : ", password);
+    DEBUG_VALUE(
+        "Password : ",
+        password);
+
 
     if (ssid.length() == 0)
     {
@@ -650,11 +921,15 @@ void ProvisioningService::HandleSave()
         return;
     }
 
-    _pendingSsid = ssid;
 
-    _pendingPassword = password;
+    _pendingSsid =
+        ssid;
+
+    _pendingPassword =
+        password;
 
     BeginConnectionAttempt();
+
 
     _server.send(
         200,
@@ -662,39 +937,57 @@ void ProvisioningService::HandleSave()
         BuildStatusJson());
 }
 
+
 void ProvisioningService::BeginConnectionAttempt()
 {
-    DEBUG_VALUE("Connecting to ", _pendingSsid);
+    DEBUG_VALUE(
+        "Connecting to ",
+        _pendingSsid);
 
     _failureReason = "";
 
-    _state = ProvisioningState::Connecting;
+    _state =
+        ProvisioningState::Connecting;
 
-    _connectStartedAt = millis();
+    _connectStartedAt =
+        millis();
 
-    if (WiFi.scanComplete() == WIFI_SCAN_RUNNING)
+
+    if (WiFi.scanComplete() ==
+        WIFI_SCAN_RUNNING)
     {
         WiFi.scanDelete();
     }
 
-    WiFi.mode(WIFI_AP_STA);
 
-    WiFi.disconnect(false, true);
+    WiFi.mode(
+        WIFI_AP_STA);
+
+
+    WiFi.disconnect(
+        false,
+        true);
 
     delay(50);
+
 
     WiFi.begin(
         _pendingSsid.c_str(),
         _pendingPassword.c_str());
 }
 
+
 void ProvisioningService::UpdateConnectionAttempt()
 {
-    if (_state == ProvisioningState::Connected)
+    if (_state ==
+        ProvisioningState::Connected)
     {
-        if (millis() - _connectedAt >= RestartDelay)
+        if (millis() -
+            _connectedAt >=
+            RestartDelay)
         {
-            DEBUG_LOG("Restarting after provisioning.");
+            DEBUG_LOG(
+                "Restarting after provisioning.");
 
             ESP.restart();
         }
@@ -702,77 +995,139 @@ void ProvisioningService::UpdateConnectionAttempt()
         return;
     }
 
-    if (_state != ProvisioningState::Connecting)
-        return;
 
-    if (WiFi.status() == WL_CONNECTED)
+    if (_state !=
+        ProvisioningState::Connecting)
     {
-        DEBUG_LOG("WiFi Connected.");
+        return;
+    }
 
-        DEBUG_VALUE("IP Address : ", WiFi.localIP());
+
+    if (WiFi.status() ==
+        WL_CONNECTED)
+    {
+        DEBUG_LOG(
+            "WiFi Connected.");
+
+        DEBUG_VALUE(
+            "IP Address : ",
+            WiFi.localIP());
+
 
         _storageService.SaveWifiCredentials(
             _pendingSsid,
             _pendingPassword);
 
-        _state = ProvisioningState::Connected;
 
-        _connectedAt = millis();
+        _state =
+            ProvisioningState::Connected;
+
+        _connectedAt =
+            millis();
 
         return;
     }
 
-    if (millis() - _connectStartedAt < ConnectTimeout)
+
+    if (millis() -
+        _connectStartedAt <
+        ConnectTimeout)
+    {
         return;
+    }
 
-    DEBUG_LOG("Provisioning connection failed.");
 
-    auto status = WiFi.status();
+    DEBUG_LOG(
+        "Provisioning connection failed.");
+
+
+    auto status =
+        WiFi.status();
+
 
     _failureReason =
-        status == WL_NO_SSID_AVAIL
+        status ==
+            WL_NO_SSID_AVAIL
             ? "That network was not found. Move the device closer and try again."
             : "Could not join the network. Please check the password and try again.";
 
-    WiFi.disconnect(false, true);
 
-    _state = ProvisioningState::Failed;
+    WiFi.disconnect(
+        false,
+        true);
+
+
+    _state =
+        ProvisioningState::Failed;
 }
+
 
 String ProvisioningService::Escape(
     const String& value)
 {
     String out;
 
-    out.reserve(value.length() + 8);
+    out.reserve(
+        value.length() + 8);
 
-    for (unsigned int i = 0; i < value.length(); i++)
+
+    for (unsigned int i = 0;
+         i < value.length();
+         i++)
     {
-        auto c = value.charAt(i);
+        auto c =
+            value.charAt(i);
+
 
         switch (c)
         {
-            case '"':  out += "\\\""; break;
-            case '\\': out += "\\\\"; break;
-            case '\n': out += "\\n";  break;
-            case '\r': out += "\\r";  break;
-            case '\t': out += "\\t";  break;
+            case '"':
+                out += "\\\"";
+                break;
+
+            case '\\':
+                out += "\\\\";
+                break;
+
+            case '\n':
+                out += "\\n";
+                break;
+
+            case '\r':
+                out += "\\r";
+                break;
+
+            case '\t':
+                out += "\\t";
+                break;
+
             default:
+
                 if ((unsigned char)c < 0x20)
                 {
                     char buf[7];
-                    snprintf(buf, sizeof(buf), "\\u%04x", (unsigned)(unsigned char)c);
+
+                    snprintf(
+                        buf,
+                        sizeof(buf),
+                        "\\u%04x",
+                        (unsigned)(
+                            unsigned char)c);
+
                     out += buf;
                 }
                 else
                 {
                     out += c;
                 }
+
+                break;
         }
     }
 
     return out;
 }
+
 
 void ProvisioningService::ConnectToWifi()
 {
@@ -782,24 +1137,43 @@ void ProvisioningService::ConnectToWifi()
     auto password =
         _storageService.GetWifiPassword();
 
-    DEBUG_VALUE("Connecting to ", ssid);
 
-    WiFi.mode(WIFI_STA);
-    WiFi.setTxPower(WIFI_POWER_8_5dBm);
-	
+    DEBUG_VALUE(
+        "Connecting to ",
+        ssid);
+
+
+    _pendingSsid =
+        ssid;
+
+
+    _pendingPassword =
+        password;
+
+
+    _failureReason = "";
+
+
+    _state =
+        ProvisioningState::Connecting;
+
+
+    _connectStartedAt =
+        millis();
+
+
+    WiFi.mode(
+        WIFI_STA);
+
+    WiFi.setTxPower(
+        WIFI_POWER_8_5dBm);
+
 
     WiFi.begin(
         ssid.c_str(),
         password.c_str());
 
-    while (WiFi.status() != WL_CONNECTED)
-    {
-        delay(500);
 
-        DEBUG_LOG_PRINT(".");
-    }
-
-    DEBUG_LOG("WiFi Connected.");
-
-    DEBUG_VALUE("IP Address : ", WiFi.localIP());
+    DEBUG_LOG(
+        "WiFi connection attempt started.");
 }

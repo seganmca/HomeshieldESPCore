@@ -1,10 +1,16 @@
 #include "Debug.h"
 #include "HomeShield.h"
+
 #include <WiFi.h>
+
 
 HomeShieldClass HomeShield;
 
-HomeShieldClass* HomeShieldClass::_instance = nullptr;
+
+HomeShieldClass*
+HomeShieldClass::_instance =
+    nullptr;
+
 
 void HomeShieldClass::begin(
     const String& deviceType,
@@ -12,9 +18,26 @@ void HomeShieldClass::begin(
 {
     _instance = this;
 
-    _firmwareVersion = firmwareVersion;
-    _deviceType = deviceType;
-    _lastHeartbeat = 0;
+
+    _firmwareVersion =
+        firmwareVersion;
+
+
+    _deviceType =
+        deviceType;
+
+
+    _lastHeartbeat =
+        0;
+
+
+    _mqttInitialized =
+        false;
+
+
+    _wasWifiConnected =
+        false;
+
 
     _registrationService =
         new RegistrationService(
@@ -22,59 +45,157 @@ void HomeShieldClass::begin(
             _httpService,
             _deviceType);
 
+
     _provisioningService =
         new ProvisioningService(
-            _storageService,
-            _httpService,
-            *_registrationService);
+            _storageService);
+
 
     _provisioningService->Begin();
+
+
+    // Start the registration task.
+    // The task itself waits for WiFi and retries
+    // until registration succeeds.
+    _registrationService->Begin();
 }
+
 
 void HomeShieldClass::loop()
 {
-    _provisioningService->Loop();
+    /*
+     * IMPORTANT:
+     *
+     * This function must remain fast.
+     *
+     * The physical device application calls this
+     * function from its main loop, so no blocking
+     * network operation is performed here.
+     */
 
-    if (!IsConnected())
+
+    if (_provisioningService != nullptr)
+    {
+        _provisioningService->Loop();
+    }
+
+
+    bool wifiConnected =
+        IsConnected();
+
+
+    /*
+     * Detect WiFi loss.
+     */
+    if (!wifiConnected)
+    {
+        if (_wasWifiConnected)
+        {
+            DEBUG_LOG(
+                "WiFi disconnected.");
+
+            _mqttService.disconnect();
+
+            _mqttInitialized =
+                false;
+
+            _wasWifiConnected =
+                false;
+        }
+
         return;
+    }
 
+
+    /*
+     * Detect WiFi reconnection.
+     */
+    if (!_wasWifiConnected)
+    {
+        DEBUG_LOG(
+            "WiFi connected.");
+
+        _wasWifiConnected =
+            true;
+
+        _mqttInitialized =
+            false;
+
+        _lastHeartbeat =
+            millis();
+    }
+
+
+    /*
+     * Initialize MQTT once per WiFi session.
+     */
     if (!_mqttInitialized)
-	{
-		_mqttService.begin(
-			"192.168.1.11",
-			1883);
+    {
+        _mqttService.begin(
+            "192.168.1.11",
+            1883);
 
-		_mqttService.setCallback(OnMqttMessage);
 
-		String topic =
-			"homeshield/device/" +
-			DeviceIdentity::GetHardwareId();
+        _mqttService.setCallback(
+            OnMqttMessage);
 
-		_mqttService.addSubscription(topic);
 
-		_mqttInitialized = true;
+        String topic =
+            "homeshield/device/" +
+            DeviceIdentity::GetHardwareId();
 
-		_lastHeartbeat = millis();
-	}
 
-	_mqttService.loop();
+        _mqttService.addSubscription(
+            topic);
 
-	if (MqttConnected())
-	{
-		if (millis() - _lastHeartbeat >= HEARTBEAT_INTERVAL)
-		{
-			publishHeartbeat();
 
-			_lastHeartbeat = millis();
-		}
-	}
+        _mqttInitialized =
+            true;
+
+
+        _lastHeartbeat =
+            millis();
+
+
+        DEBUG_LOG(
+            "MQTT service initialized.");
+    }
+
+
+    /*
+     * MQTT processing is non-blocking.
+     *
+     * Failed connections result in a single
+     * connection attempt every few seconds.
+     */
+    _mqttService.loop();
+
+
+    /*
+     * Heartbeat.
+     */
+    if (MqttConnected())
+    {
+        if (millis() -
+            _lastHeartbeat >=
+            HEARTBEAT_INTERVAL)
+        {
+            publishHeartbeat();
+
+            _lastHeartbeat =
+                millis();
+        }
+    }
 }
+
 
 void HomeShieldClass::setCommandHandler(
     CommandHandler handler)
 {
-    _commandHandler = handler;
+    _commandHandler =
+        handler;
 }
+
 
 void HomeShieldClass::OnMqttMessage(
     char* topic,
@@ -84,59 +205,94 @@ void HomeShieldClass::OnMqttMessage(
     if (_instance == nullptr)
         return;
 
+
     String message;
 
-    for (unsigned int i = 0; i < length; i++)
-        message += (char)payload[i];
+    message.reserve(
+        length);
+
+
+    for (unsigned int i = 0;
+         i < length;
+         i++)
+    {
+        message +=
+            (char)payload[i];
+    }
+
 
     if (_instance->_commandHandler)
     {
-		DEBUG_VALUE("Command Received: ", message);
-        _instance->_commandHandler(message);
+        DEBUG_VALUE(
+            "Command Received: ",
+            message);
+
+
+        _instance->_commandHandler(
+            message);
     }
 }
+
 
 bool HomeShieldClass::publish(
     const String& topic,
     const String& message)
 {
     if (!MqttConnected())
+    {
         return false;
+    }
 
-    DEBUG_VALUE("Publishing event :", message);
+
+    DEBUG_VALUE(
+        "Publishing event :",
+        message);
+
 
     return _mqttService.publish(
         topic,
         message);
 }
 
+
 String HomeShieldClass::GetHardwareId()
 {
     return DeviceIdentity::GetHardwareId();
 }
 
+
 bool HomeShieldClass::IsConnected() const
 {
-    return WiFi.status() == WL_CONNECTED;
-}	
+    return WiFi.status() ==
+        WL_CONNECTED;
+}
+
 
 void HomeShieldClass::publishHeartbeat()
 {
     String request =
-    "{"
-        "\"hardwareId\":\"" + DeviceIdentity::GetHardwareId() + "\","
+        "{"
+        "\"hardwareId\":\"" +
+        DeviceIdentity::GetHardwareId() +
+        "\","
         "\"eventType\":\"Heartbeat\","
         "\"payload\":{"
-            "\"firmwareVersion\":\"" + _firmwareVersion + "\""
+        "\"firmwareVersion\":\"" +
+        _firmwareVersion +
+        "\""
         "}"
-    "}";
+        "}";
+
 
     publish(
         "homeshield/events",
         request);
 }
 
+
 bool HomeShieldClass::MqttConnected()
 {
-    return _mqttInitialized && _mqttService.connected();
+    return
+        _mqttInitialized &&
+        _mqttService.connected();
 }

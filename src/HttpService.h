@@ -3,17 +3,33 @@
 #include <Arduino.h>
 #include <DeviceIdentity.h>
 
+struct HttpResult
+{
+    int statusCode = 0;
+    String response;
+    bool success = false;
+};
+
+
 class HttpService
 {
 public:
 
-    String Post(
+    HttpResult Post(
         const String& url,
         const String& json);
-		
-	String PostDeviceState(int state);
-	String SendHeartbeat();
-	String RegisterDevice(const String& deviceType);
-	String GetHardwareId();
-	
+
+
+    String PostDeviceState(
+        int state);
+
+
+    String SendHeartbeat();
+
+
+    HttpResult RegisterDevice(
+        const String& deviceType);
+
+
+    String GetHardwareId();
 };

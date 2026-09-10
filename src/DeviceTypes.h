@@ -4,7 +4,7 @@ namespace DeviceTypes
 {
     constexpr const char* DoorSensor   = "door-sensor";
 
-    constexpr const char* TankStateSensor = "float-sensor";
+    constexpr const char* TankSensor = "float-sensor";
 
     constexpr const char* MotorNode    = "motor-actuator";
 
@@ -19,4 +19,5 @@ namespace DeviceTypes
     constexpr const char* PIR          = "pir-sensor";
 
     constexpr const char* mmWaveRadar  = "mmwave-radar";
+
 }

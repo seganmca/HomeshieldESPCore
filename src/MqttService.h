@@ -1,5 +1,6 @@
 #pragma once
 
+#include <Arduino.h>
 #include <WiFi.h>
 #include <PubSubClient.h>
 #include <DeviceIdentity.h>
@@ -15,18 +16,23 @@ public:
 
     void loop();
 
-	bool publish( const String& topic,  const String& message);
+    bool publish(
+        const String& topic,
+        const String& message);
 
-    void addSubscription(const String& topic);
+    void addSubscription(
+        const String& topic);
 
-    void setCallback(MQTT_CALLBACK_SIGNATURE);
+    void setCallback(
+        MQTT_CALLBACK_SIGNATURE);
 
-	bool connected();
+    bool connected();
+
+    void disconnect();
 
 private:
     void connect();
 
-private:
     WiFiClient _wifiClient;
     PubSubClient _mqttClient;
 
@@ -37,6 +43,13 @@ private:
 
     static constexpr int MAX_SUBSCRIPTIONS = 10;
 
-    String _subscriptions[MAX_SUBSCRIPTIONS];
+    String _subscriptions[
+        MAX_SUBSCRIPTIONS];
+
     int _subscriptionCount = 0;
+
+    unsigned long _lastConnectAttempt = 0;
+
+    static constexpr unsigned long MQTT_RETRY_INTERVAL =
+        5000;
 };
