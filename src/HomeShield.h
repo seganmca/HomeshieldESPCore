@@ -13,6 +13,29 @@ typedef void (*CommandHandler)(
     const String&);
 
 
+// --------------------------------------------------
+// Device Telemetry
+// --------------------------------------------------
+//
+// batteryLevel:
+//   0-100 = valid battery percentage
+//   -1    = not available
+//
+// wifiStrength:
+//   WiFi RSSI in dBm
+//   Example: -45, -62, -78
+//
+// WiFi strength is collected automatically by
+// HomeShield. The device only needs to provide
+// battery level if it has a battery.
+// --------------------------------------------------
+
+struct DeviceTelemetry
+{
+    int batteryLevel = -1;
+};
+
+
 class HomeShieldClass
 {
 public:
@@ -42,6 +65,14 @@ public:
     bool MqttConnected();
 
 
+    // --------------------------------------------------
+    // Telemetry
+    // --------------------------------------------------
+
+    void SetBatteryLevel(
+        int batteryLevel);
+
+
 private:
 
     unsigned long _lastHeartbeat = 0;
@@ -57,6 +88,7 @@ private:
 
 
     StorageService _storageService;
+
 
     HttpService _httpService;
 
@@ -79,6 +111,9 @@ private:
     bool _mqttInitialized = false;
 
     bool _wasWifiConnected = false;
+
+
+    DeviceTelemetry _telemetry;
 
 
     static HomeShieldClass*

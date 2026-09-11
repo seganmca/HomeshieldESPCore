@@ -270,6 +270,10 @@ bool HomeShieldClass::IsConnected() const
 
 void HomeShieldClass::publishHeartbeat()
 {
+    int wifiStrength =
+        WiFi.RSSI();
+
+
     String request =
         "{"
         "\"hardwareId\":\"" +
@@ -279,7 +283,20 @@ void HomeShieldClass::publishHeartbeat()
         "\"payload\":{"
         "\"firmwareVersion\":\"" +
         _firmwareVersion +
-        "\""
+        "\","
+        "\"wifiStrength\":" +
+        String(wifiStrength);
+
+
+    if (_telemetry.batteryLevel >= 0)
+    {
+        request +=
+            ",\"batteryLevel\":" +
+            String(_telemetry.batteryLevel);
+    }
+
+
+    request +=
         "}"
         "}";
 
@@ -295,4 +312,22 @@ bool HomeShieldClass::MqttConnected()
     return
         _mqttInitialized &&
         _mqttService.connected();
+}
+
+void HomeShieldClass::SetBatteryLevel(
+    int batteryLevel)
+{
+    if (batteryLevel < 0)
+    {
+        _telemetry.batteryLevel = -1;
+        return;
+    }
+
+    if (batteryLevel > 100)
+    {
+        batteryLevel = 100;
+    }
+
+    _telemetry.batteryLevel =
+        batteryLevel;
 }
