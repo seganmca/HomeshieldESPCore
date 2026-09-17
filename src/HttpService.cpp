@@ -1,6 +1,7 @@
 #include "Debug.h"
 #include "HttpService.h"
 #include "Configuration.h"
+#include "JsonLite.h"
 
 #include <WiFiClient.h>
 #include <HTTPClient.h>
@@ -12,6 +13,17 @@ HttpResult HttpService::Post(
     const String& json)
 {
     HttpResult result;
+
+
+    // Milestone 37. No compiled-in fallback: without an onboarded Control
+    // Server URL there is nowhere to post.
+    if (!url.startsWith("http://"))
+    {
+        DEBUG_LOG(
+            "HTTP request skipped: no Control Server URL.");
+
+        return result;
+    }
 
 
     if (WiFi.status() !=
@@ -101,7 +113,75 @@ HttpResult HttpService::Post(
 }
 
 
+HttpResult HttpService::RegisterModule(
+    const String& controlServerUrl,
+    const String& moduleType,
+    const String& firmwareVersion,
+    const DeclaredDevice* devices,
+    int deviceCount)
+{
+    String request =
+        "{"
+        "\"hardwareId\":\"" +
+        DeviceIdentity::GetHardwareId() +
+        "\",";
+
+
+    // Omitted when empty. A single-device board declares no module
+    // type and the Control Server derives it from the one device.
+    if (moduleType.length() > 0)
+    {
+        request +=
+            "\"moduleType\":\"" +
+            JsonLite::Escape(moduleType) +
+            "\",";
+    }
+
+
+    request +=
+        "\"firmwareVersion\":\"" +
+        JsonLite::Escape(firmwareVersion) +
+        "\","
+        "\"devices\":[";
+
+
+    for (int i = 0; i < deviceCount; i++)
+    {
+        if (i > 0) request += ",";
+
+        request +=
+            "{\"deviceKey\":\"" +
+            JsonLite::Escape(devices[i].deviceKey) +
+            "\",\"deviceType\":\"" +
+            JsonLite::Escape(devices[i].deviceType) +
+            "\"";
+
+
+        if (devices[i].defaultName.length() > 0)
+        {
+            request +=
+                ",\"defaultName\":\"" +
+                JsonLite::Escape(devices[i].defaultName) +
+                "\"";
+        }
+
+
+        request += "}";
+    }
+
+
+    request += "]}";
+
+
+    return Post(
+        controlServerUrl +
+            "/api/module/register",
+        request);
+}
+
+
 HttpResult HttpService::RegisterDevice(
+    const String& controlServerUrl,
     const String& deviceType)
 {
     String request =
@@ -119,13 +199,14 @@ HttpResult HttpService::RegisterDevice(
 
 
     return Post(
-        String(Configuration::ControlServerUrl) +
+        controlServerUrl +
             "/api/device/register",
         request);
 }
 
 
 String HttpService::PostDeviceState(
+    const String& controlServerUrl,
     int state)
 {
     String request =
@@ -140,7 +221,7 @@ String HttpService::PostDeviceState(
 
     auto result =
         Post(
-            String(Configuration::ControlServerUrl) +
+            controlServerUrl +
                 "/api/device/state",
             request);
 
@@ -149,7 +230,8 @@ String HttpService::PostDeviceState(
 }
 
 
-String HttpService::SendHeartbeat()
+String HttpService::SendHeartbeat(
+    const String& controlServerUrl)
 {
     String request =
         "{"
@@ -161,7 +243,7 @@ String HttpService::SendHeartbeat()
 
     auto result =
         Post(
-            String(Configuration::ControlServerUrl) +
+            controlServerUrl +
                 "/api/device/heartbeat",
             request);
 

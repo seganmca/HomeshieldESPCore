@@ -1,993 +1,512 @@
 #include "ProvisioningService.h"
-#include "Configuration.h"
-
-#include <Arduino.h>
-#include <WiFi.h>
-#include <esp_wifi.h>
-#include <esp_netif.h>
 
 #include "Debug.h"
+#include "DeviceIdentity.h"
+#include "JsonLite.h"
+
+#include <WiFi.h>
+#include <NimBLEDevice.h>
+
 
 namespace
 {
-    const IPAddress PortalIp(
-        192, 168, 4, 1);
+    constexpr const char* ServiceUuid =
+        "70630001-d6a4-4dd0-99a1-78803d35a375";
 
-    const IPAddress PortalGateway(
-        192, 168, 4, 1);
+    constexpr const char* CommandUuid =
+        "70630002-d6a4-4dd0-99a1-78803d35a375";
 
-    const IPAddress PortalSubnet(
-        255, 255, 255, 0);
+    constexpr const char* EventUuid =
+        "70630003-d6a4-4dd0-99a1-78803d35a375";
+
+    constexpr int ProtocolVersion = 1;
 
 
-    void EnableApDnsOffer(
-        const IPAddress& apIp)
+    // The agreed failure categories.
+    constexpr const char* WifiConnectionFailed           = "WIFI_CONNECTION_FAILED";
+    constexpr const char* ControlServerConnectionFailed  = "CONTROL_SERVER_CONNECTION_FAILED";
+    constexpr const char* RegistrationFailed             = "REGISTRATION_FAILED";
+    constexpr const char* ConfigurationStorageFailed     = "CONFIGURATION_STORAGE_FAILED";
+    constexpr const char* ProvisioningTimeoutCode        = "PROVISIONING_TIMEOUT";
+    constexpr const char* InvalidConfiguration           = "INVALID_CONFIGURATION";
+
+
+    class ServerCallbacks : public NimBLEServerCallbacks
     {
-        auto netif =
-            esp_netif_get_handle_from_ifkey(
-                "WIFI_AP_DEF");
+    public:
+        explicit ServerCallbacks(ProvisioningService* owner) : _owner(owner) {}
 
-        if (netif == nullptr)
+        void onDisconnect(
+            NimBLEServer* server,
+            NimBLEConnInfo& connInfo,
+            int reason) override
         {
-            DEBUG_LOG(
-                "[PORTAL] AP netif NOT FOUND - DNS offer not configured.");
-
-            return;
+            _owner->OnClientDisconnected();
         }
 
-        esp_netif_dns_info_t dns = {};
-
-        dns.ip.type =
-            ESP_IPADDR_TYPE_V4;
-
-        dns.ip.u_addr.ip4.addr =
-            static_cast<uint32_t>(apIp);
-
-        auto stopResult =
-            esp_netif_dhcps_stop(netif);
-
-        DEBUG_VALUE(
-            "[PORTAL] dhcps_stop",
-            esp_err_to_name(stopResult));
-
-        uint8_t offerDns = 0x02;
-
-        auto optionResult =
-            esp_netif_dhcps_option(
-                netif,
-                ESP_NETIF_OP_SET,
-                ESP_NETIF_DOMAIN_NAME_SERVER,
-                &offerDns,
-                sizeof(offerDns));
-
-        DEBUG_VALUE(
-            "[PORTAL] dhcps_option(DNS)",
-            esp_err_to_name(optionResult));
-
-        auto dnsResult =
-            esp_netif_set_dns_info(
-                netif,
-                ESP_NETIF_DNS_MAIN,
-                &dns);
-
-        DEBUG_VALUE(
-            "[PORTAL] set_dns_info",
-            esp_err_to_name(dnsResult));
-
-        auto startResult =
-            esp_netif_dhcps_start(netif);
-
-        DEBUG_VALUE(
-            "[PORTAL] dhcps_start",
-            esp_err_to_name(startResult));
-
-        esp_netif_dns_info_t readBack = {};
-
-        if (esp_netif_get_dns_info(
-                netif,
-                ESP_NETIF_DNS_MAIN,
-                &readBack) == ESP_OK)
-        {
-            IPAddress offered(
-                readBack.ip.u_addr.ip4.addr);
-
-            DEBUG_VALUE(
-                "[PORTAL] DHCP will offer DNS",
-                offered);
-        }
-        else
-        {
-            DEBUG_LOG(
-                "[PORTAL] Could not read back AP DNS info.");
-        }
-    }
+    private:
+        ProvisioningService* _owner;
+    };
 
 
-    const char PortalPage[] PROGMEM = R"HTML(<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>HomeShield Setup</title>
-<style>
-:root{--bg:#0f172a;--card:#ffffff;--ink:#0f172a;--muted:#64748b;--line:#e2e8f0;--brand:#2563eb;--ok:#16a34a;--err:#dc2626}
-*{box-sizing:border-box}
-body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif}
-.wrap{max-width:460px;margin:0 auto;padding:24px 16px 40px}
-.brand{display:flex;align-items:center;gap:10px;color:#fff;margin:8px 0 18px}
-.brand svg{width:30px;height:30px;flex:none}
-.brand h1{font-size:19px;margin:0;font-weight:600;letter-spacing:.2px}
-.card{background:var(--card);border-radius:16px;padding:20px;box-shadow:0 12px 30px rgba(2,6,23,.35)}
-.card h2{margin:0 0 6px;font-size:18px}
-.lead{margin:0 0 18px;color:var(--muted);font-size:14px}
-label{display:block;font-size:13px;font-weight:600;margin:0 0 6px;color:#334155}
-.row{margin-bottom:16px}
-input[type=text],input[type=password]{width:100%;padding:12px 14px;border:1px solid var(--line);border-radius:10px;font-size:16px;background:#f8fafc}
-input:focus{outline:2px solid var(--brand);outline-offset:1px;background:#fff}
-.pw{position:relative}
-.pw input{padding-right:64px}
-.pw button{position:absolute;right:6px;top:6px;bottom:6px;border:0;background:transparent;color:var(--brand);font-size:13px;font-weight:600;padding:0 10px;cursor:pointer}
-.list{border:1px solid var(--line);border-radius:10px;overflow:hidden;max-height:230px;overflow-y:auto}
-.net{display:flex;align-items:center;gap:10px;width:100%;padding:12px 14px;border:0;border-bottom:1px solid var(--line);background:#fff;font-size:15px;text-align:left;cursor:pointer;color:var(--ink)}
-.net:last-child{border-bottom:0}
-.net.sel{background:#eff6ff}
-.net .nm{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.net .mt{color:var(--muted);font-size:12px;display:flex;align-items:center;gap:5px}
-.bars{display:inline-flex;align-items:flex-end;gap:2px;height:14px}
-.bars i{width:3px;background:var(--line);border-radius:1px}
-.bars i:nth-child(1){height:4px}.bars i:nth-child(2){height:7px}.bars i:nth-child(3){height:10px}.bars i:nth-child(4){height:14px}
-.bars i.on{background:var(--brand)}
-.hint{color:var(--muted);font-size:12px;margin:8px 2px 0}
-.linkbtn{background:none;border:0;color:var(--brand);font-size:13px;font-weight:600;padding:0;cursor:pointer}
-.bar{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px}
-button.go{width:100%;padding:14px;border:0;border-radius:10px;background:var(--brand);color:#fff;font-size:16px;font-weight:600;cursor:pointer}
-button.go:disabled{opacity:.55}
-.state{text-align:center;padding:8px 0 4px}
-.spin{width:34px;height:34px;margin:6px auto 14px;border:3px solid var(--line);border-top-color:var(--brand);border-radius:50%;animation:sp 1s linear infinite}
-@keyframes sp{to{transform:rotate(360deg)}}
-.dot{width:44px;height:44px;border-radius:50%;margin:4px auto 14px;display:flex;align-items:center;justify-content:center;color:#fff;font-size:24px}
-.dot.ok{background:var(--ok)}.dot.err{background:var(--err)}
-.msg{color:var(--muted);font-size:14px;margin:0 0 16px}
-.foot{color:#94a3b8;font-size:12px;text-align:center;margin-top:18px}
-.hide{display:none}
-</style>
-</head>
-<body>
-<div class="wrap">
-  <div class="brand">
-    <svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2l8 3.5v6c0 5-3.4 9.3-8 10.5-4.6-1.2-8-5.5-8-10.5v-6z"/><path d="M9 12l2 2 4-4"/></svg>
-    <h1>HomeShield</h1>
-  </div>
-
-  <div class="card" id="form">
-    <h2>Connect to your Wi-Fi</h2>
-    <p class="lead">Choose your home Wi-Fi network and enter its password. Your HomeShield device will use it to stay online.</p>
-
-    <div class="row">
-      <div class="bar"><label>Available networks</label><button class="linkbtn" id="rescan" type="button">Rescan</button></div>
-      <div class="list" id="list"><div style="padding:14px;color:#64748b;font-size:14px">Scanning&hellip;</div></div>
-      <p class="hint" id="manualHint"><button class="linkbtn" id="manual" type="button">Enter network name manually</button></p>
-    </div>
-
-    <div class="row hide" id="ssidRow">
-      <label for="ssid">Network name (SSID)</label>
-      <input type="text" id="ssid" autocapitalize="none" autocorrect="off" spellcheck="false" placeholder="MyHomeWiFi">
-    </div>
-
-    <div class="row">
-      <label for="pwd">Wi-Fi password</label>
-      <div class="pw">
-        <input type="password" id="pwd" autocapitalize="none" autocorrect="off" spellcheck="false" placeholder="Password">
-        <button type="button" id="toggle">Show</button>
-      </div>
-    </div>
-
-    <button class="go" id="go">Connect</button>
-    <p class="hint" id="err" style="color:#dc2626"></p>
-  </div>
-
-  <div class="card hide" id="busy">
-    <div class="state">
-      <div class="spin"></div>
-      <h2 id="bt">Connecting&hellip;</h2>
-      <p class="msg" id="bm">Joining your Wi-Fi network. This can take up to half a minute.</p>
-    </div>
-  </div>
-
-  <div class="card hide" id="done">
-    <div class="state">
-      <div class="dot ok">&#10003;</div>
-      <h2>Connected</h2>
-      <p class="msg" id="dm">Your device is now on your home Wi-Fi and is restarting. You can reconnect your phone to your normal network.</p>
-    </div>
-  </div>
-
-  <div class="card hide" id="fail">
-    <div class="state">
-      <div class="dot err">!</div>
-      <h2>Couldn't connect</h2>
-      <p class="msg" id="fm">Please check the password and try again.</p>
-      <button class="go" id="retry">Try again</button>
-    </div>
-  </div>
-
-  <p class="foot">HomeShield device setup &middot; 192.168.4.1</p>
-</div>
-
-<script>
-var sel="", open=false, poll=null;
-
-function $(i){
-  return document.getElementById(i)
-}
-
-function show(id){
-  ["form","busy","done","fail"].forEach(function(x){
-    $(x).classList.toggle("hide",x!==id)
-  })
-}
-
-function bars(r){
-  var n=r>=-55?4:r>=-65?3:r>=-75?2:1,h="";
-  for(var i=1;i<=4;i++)
-    h+='<i class="'+(i<=n?"on":"")+'"></i>';
-  return '<span class="bars">'+h+'</span>'
-}
-
-function esc(s){
-  return s.replace(/[&<>"]/g,function(c){
-    return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]
-  })
-}
-
-function scan(){
-  $("list").innerHTML='<div style="padding:14px;color:#64748b;font-size:14px">Scanning&hellip;</div>';
-
-  fetch("/scan"+(arguments[0]?"?refresh=1":""))
-    .then(function(r){return r.json()})
-    .then(function(d){
-      if(d.status==="scanning"){
-        setTimeout(scan,1200);
-        return
-      }
-
-      var n=d.networks||[];
-
-      if(!n.length){
-        $("list").innerHTML='<div style="padding:14px;color:#64748b;font-size:14px">No networks found. Tap Rescan or enter the name manually.</div>';
-        return
-      }
-
-      $("list").innerHTML=n.map(function(x){
-        return '<button type="button" class="net'+
-          (x.ssid===sel?" sel":"")+
-          '" data-s="'+esc(x.ssid)+'"><span class="nm">'+
-          esc(x.ssid)+
-          '</span><span class="mt">'+
-          (x.secure?"&#128274;":"")+
-          bars(x.rssi)+
-          '</span></button>'
-      }).join("");
-
-      Array.prototype.forEach.call(
-        $("list").querySelectorAll(".net"),
-        function(b){
-          b.onclick=function(){
-            sel=b.getAttribute("data-s");
-            $("ssid").value=sel;
-            $("err").textContent="";
-
-            Array.prototype.forEach.call(
-              $("list").querySelectorAll(".net"),
-              function(o){
-                o.classList.remove("sel")
-              });
-
-            b.classList.add("sel");
-            $("pwd").focus()
-          }
-        });
-    })
-    .catch(function(){
-      setTimeout(scan,2000)
-    })
-}
-
-$("rescan").onclick=scan;
-
-$("manual").onclick=function(){
-  $("ssidRow").classList.remove("hide");
-  $("manualHint").classList.add("hide");
-  $("ssid").focus()
-};
-
-$("toggle").onclick=function(){
-  open=!open;
-  $("pwd").type=open?"text":"password";
-  $("toggle").textContent=open?"Hide":"Show"
-};
-
-$("retry").onclick=function(){
-  show("form");
-  scan()
-};
-
-$("go").onclick=function(){
-  var s=$("ssid").value||sel;
-
-  if(!s){
-    $("err").textContent="Select a network or enter its name.";
-    return
-  }
-
-  $("go").disabled=true;
-  $("err").textContent="";
-
-  var b=
-    "ssid="+encodeURIComponent(s)+
-    "&password="+encodeURIComponent($("pwd").value);
-
-  fetch(
-    "/save",
+    class CommandCallbacks : public NimBLECharacteristicCallbacks
     {
-      method:"POST",
-      headers:{
-        "Content-Type":
-          "application/x-www-form-urlencoded"
-      },
-      body:b
-    })
-    .then(function(){
-      show("busy");
-      $("bm").textContent=
-        'Joining "'+s+'". This can take up to half a minute.';
-      track()
-    })
-    .catch(function(){
-      $("go").disabled=false;
-      $("err").textContent=
-        "Could not reach the device. Please try again."
-    });
-};
+    public:
+        explicit CommandCallbacks(ProvisioningService* owner) : _owner(owner) {}
 
-function track(){
-  if(poll)
-    clearInterval(poll);
+        void onWrite(
+            NimBLECharacteristic* characteristic,
+            NimBLEConnInfo& connInfo) override
+        {
+            const NimBLEAttValue value =
+                characteristic->getValue();
 
-  var misses=0;
-
-  poll=setInterval(function(){
-    fetch(
-      "/status",
-      {
-        cache:"no-store"
-      })
-      .then(function(r){
-        return r.json()
-      })
-      .then(function(d){
-        misses=0;
-
-        if(d.state==="connected"){
-          clearInterval(poll);
-
-          $("dm").textContent=
-            "Your device joined \""+
-            d.ssid+
-            "\" and is restarting. Reconnect your phone to your normal network.";
-
-          show("done")
+            _owner->OnCommandWritten(
+                value.data(),
+                value.length());
         }
-        else if(d.state==="failed"){
-          clearInterval(poll);
 
-          $("fm").textContent=
-            d.reason||
-            "Please check the password and try again.";
+    private:
+        ProvisioningService* _owner;
+    };
 
-          $("go").disabled=false;
-          show("fail")
+
+    class EventCallbacks : public NimBLECharacteristicCallbacks
+    {
+    public:
+        explicit EventCallbacks(ProvisioningService* owner) : _owner(owner) {}
+
+        // Called when an indication is confirmed, fails or times out.
+        void onStatus(
+            NimBLECharacteristic* characteristic,
+            NimBLEConnInfo& connInfo,
+            int code) override
+        {
+            _owner->OnIndicationFinished();
         }
-      })
-      .catch(function(){
-        misses++;
 
-        if(misses>12){
-          clearInterval(poll);
-
-          $("dm").textContent=
-            "The device left setup mode, which usually means it joined your Wi-Fi. Reconnect your phone to your normal network.";
-
-          show("done")
-        }
-      });
-  },1500)
-}
-
-scan();
-</script>
-</body>
-</html>)HTML";
+    private:
+        ProvisioningService* _owner;
+    };
 }
 
 
 ProvisioningService::ProvisioningService(
-    StorageService& storageService)
-    : _storageService(storageService)
+    StorageService& storageService,
+    RegistrationService& registrationService)
+    : _storageService(storageService),
+      _registrationService(registrationService)
 {
+}
+
+
+bool ProvisioningService::IsProvisioned() const
+{
+    return _state == State::Provisioned;
+}
+
+
+const String& ProvisioningService::GetControlServerUrl() const
+{
+    return _config.controlServerUrl;
 }
 
 
 void ProvisioningService::Begin()
 {
-    if (_storageService.HasWifiCredentials())
-    {
-        DEBUG_LOG("WiFi credentials found.");
+    // The provisioning configuration lives in HomeShield's own NVS keys. The
+    // Wi-Fi driver must not keep a second copy that a reset would not clear.
+    WiFi.persistent(false);
 
-        ConnectToWifi();
+    if (_storageService.LoadProvisioningConfig(_config))
+    {
+        DEBUG_LOG("Provisioned. Connecting to the stored Wi-Fi.");
+
+        _state = State::Provisioned;
+
+        _registrationService.SetControlServerUrl(
+            _config.controlServerUrl);
+
+        WiFi.mode(WIFI_STA);
+
+        WiFi.setTxPower(WIFI_POWER_8_5dBm);
+
+        WiFi.begin(
+            _config.wifiSsid.c_str(),
+            _config.wifiPassword.c_str());
 
         return;
     }
 
-    DEBUG_LOG("No WiFi credentials.");
+    // A board that carries only the pre-M37 Wi-Fi keys lands here too: it has
+    // no Control Server URL and no commit marker, so it is onboarded over BLE.
+    Serial.println(
+        "[HomeShield] Not provisioned. Advertising for BLE onboarding as HS-" +
+        DeviceIdentity::GetHardwareId());
 
-    StartCaptivePortal();
+    _config = ProvisioningConfig();
+
+    _state = State::Unprovisioned;
+
+    StartBle();
 }
 
 
-void ProvisioningService::StartCaptivePortal()
+void ProvisioningService::StartBle()
 {
-    WiFi.persistent(false);
+    String name =
+        "HS-" + DeviceIdentity::GetHardwareId();
 
-    RunInitialScan();
+    NimBLEDevice::init(name.c_str());
 
-    WiFi.mode(WIFI_AP);
+    NimBLEDevice::setMTU(247);
 
-    WiFi.setTxPower(
-        WIFI_POWER_8_5dBm);
+    // LE Secure Connections, Just Works, no bonding (D6).
+    NimBLEDevice::setSecurityAuth(false, false, true);
 
-    WiFi.softAPConfig(
-        PortalIp,
-        PortalGateway,
-        PortalSubnet);
+    NimBLEDevice::setSecurityIOCap(BLE_HS_IO_NO_INPUT_OUTPUT);
 
-    if (WiFi.softAP(ApSsid))
-    {
-        DEBUG_LOG(
-            "Access Point started.");
-    }
-    else
-    {
-        DEBUG_LOG(
-            "Failed to start Access Point.");
-    }
+    NimBLEServer* server =
+        NimBLEDevice::createServer();
 
-    delay(200);
+    server->setCallbacks(new ServerCallbacks(this));
 
-    EnableApDnsOffer(
-        WiFi.softAPIP());
+    // Advertising is resumed by Loop(), and only while unprovisioned.
+    server->advertiseOnDisconnect(false);
 
-    _dnsServer.setTTL(0);
+    NimBLEService* service =
+        server->createService(ServiceUuid);
 
-    _dnsServer.setErrorReplyCode(
-        DNSReplyCode::NoError);
+    // Encrypted write: the first command triggers pairing, so the Wi-Fi
+    // password never crosses an unencrypted link.
+    NimBLECharacteristic* command =
+        service->createCharacteristic(
+            CommandUuid,
+            NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::WRITE_ENC);
 
-    if (_dnsServer.start(
-            DnsPort,
-            "*",
-            WiFi.softAPIP()))
-    {
-        DEBUG_LOG(
-            "DNS server started.");
-    }
-    else
-    {
-        DEBUG_LOG(
-            "Failed to start DNS server.");
-    }
+    command->setCallbacks(new CommandCallbacks(this));
 
-    ConfigureRoutes();
+    _eventCharacteristic =
+        service->createCharacteristic(
+            EventUuid,
+            NIMBLE_PROPERTY::INDICATE);
 
-    static const char* headerKeys[] =
-    {
-        "User-Agent"
-    };
+    _eventCharacteristic->setCallbacks(new EventCallbacks(this));
 
-    _server.collectHeaders(
-        headerKeys,
-        1);
+    service->start();
 
-    _server.begin();
-
-    _portalActive = true;
-
-    _state =
-        ProvisioningState::Idle;
-
-    DEBUG_LOG(
-        "Web server started.");
-
-    DEBUG_VALUE(
-        "AP IP : ",
-        WiFi.softAPIP());
-
-    DEBUG_LOG(
-        "[PORTAL] Waiting for a phone to join and probe...");
+    StartAdvertising();
 }
 
+
+void ProvisioningService::StartAdvertising()
+{
+    NimBLEAdvertising* advertising =
+        NimBLEDevice::getAdvertising();
+
+    // The name goes in the advertisement, the 128-bit service UUID in the
+    // scan response: both do not fit in 31 bytes.
+    NimBLEAdvertisementData advertisement;
+
+    advertisement.setFlags(BLE_HS_ADV_F_DISC_GEN | BLE_HS_ADV_F_BREDR_UNSUP);
+
+    advertisement.setName(
+        std::string("HS-") + DeviceIdentity::GetHardwareId().c_str());
+
+    NimBLEAdvertisementData scanResponse;
+
+    scanResponse.addServiceUUID(NimBLEUUID(ServiceUuid));
+
+    advertising->setAdvertisementData(advertisement);
+
+    advertising->setScanResponseData(scanResponse);
+
+    advertising->start();
+}
+
+
+bool ProvisioningService::HasClient() const
+{
+    NimBLEServer* server =
+        NimBLEDevice::getServer();
+
+    return server != nullptr &&
+        server->getConnectedCount() > 0;
+}
+
+
+// ==================================================
+// BLE host task -> Loop()
+// ==================================================
+
+void ProvisioningService::OnCommandWritten(
+    const uint8_t* data,
+    size_t length)
+{
+    if (length > MaxMessageLength)
+    {
+        length = MaxMessageLength;
+    }
+
+    portENTER_CRITICAL(&_inboxLock);
+
+    memcpy(_inbox, data, length);
+
+    _inbox[length] = '\0';
+
+    _hasInbox = true;
+
+    portEXIT_CRITICAL(&_inboxLock);
+}
+
+
+void ProvisioningService::OnClientDisconnected()
+{
+    _clientDisconnected = true;
+}
+
+
+void ProvisioningService::OnIndicationFinished()
+{
+    _indicationFinished = true;
+}
+
+
+// ==================================================
+// Loop
+// ==================================================
 
 void ProvisioningService::Loop()
 {
-    if (!_portalActive)
+    if (_state == State::Provisioned)
+    {
         return;
-
-    _dnsServer.processNextRequest();
-
-    _server.handleClient();
-
-#if DEBUG
-    if (millis() - _lastPortalLog >= 5000)
-    {
-        _lastPortalLog = millis();
-
-        DEBUG_VALUE(
-            "[PORTAL] clients associated",
-            WiFi.softAPgetStationNum());
-    }
-#endif
-
-    UpdateConnectionAttempt();
-}
-
-
-void ProvisioningService::ConfigureRoutes()
-{
-    _server.on(
-        "/",
-        [this]()
-        {
-            HandleRoot();
-        });
-
-
-    _server.on(
-        "/save",
-        HTTP_POST,
-        [this]()
-        {
-            HandleSave();
-        });
-
-
-    _server.on(
-        "/scan",
-        [this]()
-        {
-            HandleScan();
-        });
-
-
-    _server.on(
-        "/status",
-        [this]()
-        {
-            HandleStatus();
-        });
-
-
-    const char* detectionPaths[] =
-    {
-        "/generate_204",
-        "/gen_204",
-        "/hotspot-detect.html",
-        "/library/test/success.html",
-        "/connecttest.txt",
-        "/ncsi.txt",
-        "/redirect",
-        "/fwlink",
-        "/canonical.html",
-        "/success.txt"
-    };
-
-
-    for (auto path : detectionPaths)
-    {
-        _server.on(
-            path,
-            [this]()
-            {
-                HandleCaptiveRedirect();
-            });
     }
 
 
-    _server.onNotFound(
-        [this]()
-        {
-            HandleCaptiveRedirect();
-        });
-}
-
-
-void ProvisioningService::LogRequest(
-    const char* tag)
-{
-#if DEBUG
-    Serial.print("[PORTAL] ");
-    Serial.print(tag);
-    Serial.print(" method=");
-
-    Serial.print(
-        _server.method() == HTTP_GET
-            ? "GET"
-            : _server.method() == HTTP_POST
-                ? "POST"
-                : "OTHER");
-
-    Serial.print(" host=");
-    Serial.print(
-        _server.hostHeader());
-
-    Serial.print(" uri=");
-    Serial.print(
-        _server.uri());
-
-    Serial.print(" ua=");
-    Serial.println(
-        _server.header(
-            "User-Agent"));
-#else
-    (void)tag;
-#endif
-}
-
-
-void ProvisioningService::HandleCaptiveRedirect()
-{
-    LogRequest("probe");
-
-    HandleRoot();
-}
-
-
-void ProvisioningService::HandleRoot()
-{
-    LogRequest("root");
-
-    _server.sendHeader(
-        "Cache-Control",
-        "no-cache, no-store, must-revalidate");
-
-    _server.sendHeader(
-        "Pragma",
-        "no-cache");
-
-    _server.send_P(
-        200,
-        "text/html",
-        PortalPage);
-
-    DEBUG_VALUE(
-        "[PORTAL] served setup page, bytes",
-        strlen_P(PortalPage));
-
-    DEBUG_VALUE(
-        "[PORTAL] client still connected",
-        _server.client().connected());
-}
-
-
-String ProvisioningService::BuildScanJson(
-    int count)
-{
-    String json =
-        "{\"status\":\"done\",\"networks\":[";
-
-    auto limit =
-        count > 20
-            ? 20
-            : count;
-
-    bool first = true;
-
-    for (int i = 0; i < limit; i++)
+    if (_hasInbox)
     {
-        auto ssid =
-            WiFi.SSID(i);
+        char message[MaxMessageLength + 1];
 
-        if (ssid.length() == 0)
-            continue;
+        portENTER_CRITICAL(&_inboxLock);
 
-        if (!first)
-            json += ",";
+        memcpy(message, _inbox, sizeof(message));
 
-        first = false;
+        _hasInbox = false;
 
-        json += "{\"ssid\":\"";
-        json += Escape(ssid);
-        json += "\",\"rssi\":";
-        json += String(WiFi.RSSI(i));
-        json += ",\"secure\":";
-        json +=
-            WiFi.encryptionType(i)
-                == WIFI_AUTH_OPEN
-                    ? "false"
-                    : "true";
-        json += "}";
+        portEXIT_CRITICAL(&_inboxLock);
+
+        HandleCommand(String(message));
     }
 
-    json += "]}";
 
-    WiFi.scanDelete();
-
-    return json;
-}
-
-
-void ProvisioningService::RunInitialScan()
-{
-    WiFi.mode(
-        WIFI_AP_STA);
-
-    auto count =
-        WiFi.scanNetworks(
-            false,
-            false);
-
-    DEBUG_VALUE(
-        "[PORTAL] initial scan networks",
-        count);
-
-    _scanJson =
-        count > 0
-            ? BuildScanJson(count)
-            : String(
-                "{\"status\":\"done\",\"networks\":[]}");
-
-    WiFi.mode(WIFI_AP);
-}
-
-
-void ProvisioningService::HandleScan()
-{
-    LogRequest("scan");
-
-    auto result =
-        WiFi.scanComplete();
-
-    if (result ==
-        WIFI_SCAN_RUNNING)
+    if (_clientDisconnected)
     {
-        _server.send(
-            200,
-            "application/json",
-            "{\"status\":\"scanning\"}");
+        _clientDisconnected = false;
+
+        // Before commit, a phone that leaves takes its configuration with it.
+        // After commit the transaction carries on without the phone.
+        if (_state == State::Unprovisioned)
+        {
+            DiscardPending();
+
+            StartAdvertising();
+        }
+    }
+
+
+    if (_state == State::Provisioning)
+    {
+        UpdateProvisioning();
+    }
+}
+
+
+// ==================================================
+// Commands
+// ==================================================
+
+void ProvisioningService::HandleCommand(
+    const String& json)
+{
+    String op;
+
+    long id = 0;
+
+    JsonLite::ReadLong(json, "id", id);
+
+    if (!JsonLite::ReadString(json, "op", op))
+    {
+        SendAck(id, false);
 
         return;
     }
 
 
-    if (_scanPending &&
-        result >= 0)
+    if (op == "GET_IDENTITY")
     {
-        _scanJson =
-            BuildScanJson(result);
+        Send(
+            "{\"type\":\"IDENTITY_RESPONSE\",\"id\":" + String(id) +
+            ",\"hardwareId\":\"" + DeviceIdentity::GetHardwareId() +
+            "\",\"protocolVersion\":" + String(ProtocolVersion) + "}");
 
-        _scanPending = false;
-
-        WiFi.mode(WIFI_AP);
+        return;
     }
 
 
-    if (_server.hasArg("refresh") &&
-        !_scanPending)
+    // Configuration is only accepted while nothing is in progress.
+    if (_state != State::Unprovisioned)
     {
-        if (WiFi.getMode() !=
-            WIFI_AP_STA)
+        SendAck(id, false);
+
+        return;
+    }
+
+
+    if (op == "SET_WIFI_CONFIGURATION")
+    {
+        String ssid;
+        String password;
+
+        bool valid =
+            JsonLite::ReadString(json, "ssid", ssid) &&
+            JsonLite::ReadString(json, "password", password) &&
+            IsValidSsid(ssid) &&
+            IsValidPassword(password);
+
+        if (valid)
         {
-            WiFi.mode(
-                WIFI_AP_STA);
+            _pending.wifiSsid = ssid;
+            _pending.wifiPassword = password;
+            _hasWifi = true;
         }
 
-        WiFi.scanNetworks(
-            true,
-            false);
-
-        _scanPending = true;
-
-        _server.send(
-            200,
-            "application/json",
-            "{\"status\":\"scanning\"}");
+        SendAck(id, valid);
 
         return;
     }
 
 
-    if (_scanJson.length() == 0)
+    if (op == "SET_CONTROL_SERVER_CONFIGURATION")
     {
-        _scanJson =
-            "{\"status\":\"done\",\"networks\":[]}";
-    }
+        String url;
 
-    _server.send(
-        200,
-        "application/json",
-        _scanJson);
-}
+        bool valid =
+            JsonLite::ReadString(json, "controlServerUrl", url);
 
+        while (valid && url.endsWith("/"))
+        {
+            url.remove(url.length() - 1);
+        }
 
-void ProvisioningService::HandleStatus()
-{
-    LogRequest("status");
+        valid = valid && IsValidUrl(url);
 
-    _server.sendHeader(
-        "Cache-Control",
-        "no-cache, no-store, must-revalidate");
+        if (valid)
+        {
+            _pending.controlServerUrl = url;
+            _hasControlServer = true;
+        }
 
-    _server.send(
-        200,
-        "application/json",
-        BuildStatusJson());
-}
-
-
-String ProvisioningService::BuildStatusJson()
-{
-    String state = "idle";
-
-    switch (_state)
-    {
-        case ProvisioningState::Connecting:
-            state = "connecting";
-            break;
-
-        case ProvisioningState::Connected:
-            state = "connected";
-            break;
-
-        case ProvisioningState::Failed:
-            state = "failed";
-            break;
-
-        default:
-            break;
-    }
-
-
-    String json =
-        "{\"state\":\"" +
-        state +
-        "\"";
-
-    json +=
-        ",\"ssid\":\"" +
-        Escape(_pendingSsid) +
-        "\"";
-
-
-    if (_state ==
-        ProvisioningState::Connected)
-    {
-        json +=
-            ",\"ip\":\"" +
-            WiFi.localIP().toString() +
-            "\"";
-    }
-
-
-    if (_state ==
-        ProvisioningState::Failed)
-    {
-        json +=
-            ",\"reason\":\"" +
-            Escape(_failureReason) +
-            "\"";
-    }
-
-
-    json += "}";
-
-    return json;
-}
-
-
-void ProvisioningService::HandleSave()
-{
-    LogRequest("save");
-
-    auto ssid =
-        _server.arg("ssid");
-
-    auto password =
-        _server.arg("password");
-
-    DEBUG_VALUE(
-        "SSID : ",
-        ssid);
-
-    DEBUG_VALUE(
-        "Password : ",
-        password);
-
-
-    if (ssid.length() == 0)
-    {
-        _server.send(
-            400,
-            "application/json",
-            "{\"state\":\"failed\",\"reason\":\"Network name is required.\"}");
+        SendAck(id, valid);
 
         return;
     }
 
 
-    _pendingSsid =
-        ssid;
-
-    _pendingPassword =
-        password;
-
-    BeginConnectionAttempt();
-
-
-    _server.send(
-        200,
-        "application/json",
-        BuildStatusJson());
-}
-
-
-void ProvisioningService::BeginConnectionAttempt()
-{
-    DEBUG_VALUE(
-        "Connecting to ",
-        _pendingSsid);
-
-    _failureReason = "";
-
-    _state =
-        ProvisioningState::Connecting;
-
-    _connectStartedAt =
-        millis();
-
-
-    if (WiFi.scanComplete() ==
-        WIFI_SCAN_RUNNING)
+    if (op == "COMMIT_PROVISIONING")
     {
-        WiFi.scanDelete();
+        bool ready =
+            _hasWifi &&
+            _hasControlServer;
+
+        SendAck(id, ready);
+
+        if (ready)
+        {
+            _commitId = id;
+
+            Commit();
+        }
+
+        return;
     }
 
 
-    WiFi.mode(
-        WIFI_AP_STA);
+    SendAck(id, false);
+}
 
 
-    WiFi.disconnect(
-        false,
-        true);
+void ProvisioningService::Send(
+    const String& json)
+{
+    if (_eventCharacteristic == nullptr || !HasClient())
+    {
+        return;
+    }
 
-    delay(50);
+    DEBUG_VALUE("[BLE] ->", json);
 
+    _eventCharacteristic->indicate(
+        (const uint8_t*)json.c_str(),
+        json.length());
+}
+
+
+void ProvisioningService::SendAck(
+    long id,
+    bool ok)
+{
+    if (ok)
+    {
+        Send("{\"type\":\"ACK\",\"id\":" + String(id) + ",\"ok\":true}");
+    }
+    else
+    {
+        Send(
+            "{\"type\":\"ACK\",\"id\":" + String(id) +
+            ",\"ok\":false,\"code\":\"" + InvalidConfiguration + "\"}");
+    }
+}
+
+
+// ==================================================
+// The transaction
+// ==================================================
+
+void ProvisioningService::Commit()
+{
+    DEBUG_VALUE("Provisioning: joining ", _pending.wifiSsid);
+
+    _state = State::Provisioning;
+
+    _commitAt = millis();
+
+    _wifiStartedAt = millis();
+
+    _wifiJoined = false;
+
+    _restarting = false;
+
+    WiFi.mode(WIFI_STA);
+
+    WiFi.setTxPower(WIFI_POWER_8_5dBm);
 
     WiFi.begin(
-        _pendingSsid.c_str(),
-        _pendingPassword.c_str());
+        _pending.wifiSsid.c_str(),
+        _pending.wifiPassword.c_str());
 }
 
 
-void ProvisioningService::UpdateConnectionAttempt()
+void ProvisioningService::UpdateProvisioning()
 {
-    if (_state ==
-        ProvisioningState::Connected)
+    if (_restarting)
     {
-        if (millis() -
-            _connectedAt >=
-            RestartDelay)
+        if (_indicationFinished ||
+            millis() - _succeededAt >= RestartDelay)
         {
-            DEBUG_LOG(
-                "Restarting after provisioning.");
+            DEBUG_LOG("Provisioned. Restarting.");
+
+            delay(100);
 
             ESP.restart();
         }
@@ -996,184 +515,219 @@ void ProvisioningService::UpdateConnectionAttempt()
     }
 
 
-    if (_state !=
-        ProvisioningState::Connecting)
+    if (millis() - _commitAt >= ProvisioningTimeout)
     {
-        return;
-    }
-
-
-    if (WiFi.status() ==
-        WL_CONNECTED)
-    {
-        DEBUG_LOG(
-            "WiFi Connected.");
-
-        DEBUG_VALUE(
-            "IP Address : ",
-            WiFi.localIP());
-
-
-        _storageService.SaveWifiCredentials(
-            _pendingSsid,
-            _pendingPassword);
-
-
-        _state =
-            ProvisioningState::Connected;
-
-        _connectedAt =
-            millis();
+        Fail(ProvisioningTimeoutCode);
 
         return;
     }
 
 
-    if (millis() -
-        _connectStartedAt <
-        ConnectTimeout)
+    // 1. Wi-Fi.
+    if (!_wifiJoined)
     {
-        return;
-    }
-
-
-    DEBUG_LOG(
-        "Provisioning connection failed.");
-
-
-    auto status =
-        WiFi.status();
-
-
-    _failureReason =
-        status ==
-            WL_NO_SSID_AVAIL
-            ? "That network was not found. Move the device closer and try again."
-            : "Could not join the network. Please check the password and try again.";
-
-
-    WiFi.disconnect(
-        false,
-        true);
-
-
-    _state =
-        ProvisioningState::Failed;
-}
-
-
-String ProvisioningService::Escape(
-    const String& value)
-{
-    String out;
-
-    out.reserve(
-        value.length() + 8);
-
-
-    for (unsigned int i = 0;
-         i < value.length();
-         i++)
-    {
-        auto c =
-            value.charAt(i);
-
-
-        switch (c)
+        if (WiFi.status() == WL_CONNECTED)
         {
-            case '"':
-                out += "\\\"";
-                break;
+            _wifiJoined = true;
 
-            case '\\':
-                out += "\\\\";
-                break;
+            DEBUG_VALUE("Provisioning: Wi-Fi joined, IP ", WiFi.localIP());
 
-            case '\n':
-                out += "\\n";
-                break;
-
-            case '\r':
-                out += "\\r";
-                break;
-
-            case '\t':
-                out += "\\t";
-                break;
-
-            default:
-
-                if ((unsigned char)c < 0x20)
-                {
-                    char buf[7];
-
-                    snprintf(
-                        buf,
-                        sizeof(buf),
-                        "\\u%04x",
-                        (unsigned)(
-                            unsigned char)c);
-
-                    out += buf;
-                }
-                else
-                {
-                    out += c;
-                }
-
-                break;
+            // 2. The existing registration, against the supplied URL.
+            _registrationService.SetControlServerUrl(
+                _pending.controlServerUrl);
         }
+        else if (millis() - _wifiStartedAt >= WifiConnectTimeout)
+        {
+            Fail(WifiConnectionFailed);
+        }
+
+        return;
     }
 
-    return out;
+
+    if (_registrationService.IsRegistered())
+    {
+        Succeed();
+
+        return;
+    }
+
+
+    int status =
+        _registrationService.LastStatusCode();
+
+    if (status == 422 ||
+        _registrationService.FailedAttempts() >= MaxRegistrationFailures)
+    {
+        // No HTTP response at all means the server was never reached.
+        Fail(
+            status > 0
+                ? RegistrationFailed
+                : ControlServerConnectionFailed);
+    }
 }
 
 
-void ProvisioningService::ConnectToWifi()
+void ProvisioningService::Succeed()
 {
-    auto ssid =
-        _storageService.GetWifiSsid();
+    // 3. Persist, only now.
+    if (!_storageService.SaveProvisioningConfig(_pending))
+    {
+        Fail(ConfigurationStorageFailed);
 
-    auto password =
-        _storageService.GetWifiPassword();
+        return;
+    }
 
+    // 4. Report.
+    _indicationFinished = false;
 
-    DEBUG_VALUE(
-        "Connecting to ",
-        ssid);
+    Send(
+        "{\"type\":\"PROVISIONING_SUCCESS\",\"id\":" + String(_commitId) +
+        ",\"moduleId\":" + String(_registrationService.ModuleId()) + "}");
 
+    DiscardPending();
 
-    _pendingSsid =
-        ssid;
+    // 5. Restart once the phone has confirmed the indication, or shortly
+    // after. The next boot runs from NVS.
+    _restarting = true;
 
-
-    _pendingPassword =
-        password;
-
-
-    _failureReason = "";
-
-
-    _state =
-        ProvisioningState::Connecting;
+    _succeededAt = millis();
+}
 
 
-    _connectStartedAt =
-        millis();
+void ProvisioningService::Fail(
+    const char* code)
+{
+    Serial.print("[HomeShield] Provisioning failed: ");
+    Serial.println(code);
+
+    // Nothing was persisted. Stop registering and leave the network.
+    _registrationService.SetControlServerUrl("");
+
+    WiFi.disconnect(true);
+
+    DiscardPending();
+
+    Send(
+        "{\"type\":\"PROVISIONING_FAILED\",\"id\":" + String(_commitId) +
+        ",\"code\":\"" + code + "\"}");
+
+    _state = State::Unprovisioned;
+
+    if (!HasClient())
+    {
+        StartAdvertising();
+    }
+}
 
 
-    WiFi.mode(
-        WIFI_STA);
+void ProvisioningService::DiscardPending()
+{
+    _pending = ProvisioningConfig();
 
-    WiFi.setTxPower(
-        WIFI_POWER_8_5dBm);
+    _hasWifi = false;
 
-
-    WiFi.begin(
-        ssid.c_str(),
-        password.c_str());
+    _hasControlServer = false;
+}
 
 
-    DEBUG_LOG(
-        "WiFi connection attempt started.");
+// ==================================================
+// Validation
+// ==================================================
+
+bool ProvisioningService::IsValidSsid(
+    const String& ssid)
+{
+    return ssid.length() >= 1 &&
+        ssid.length() <= 32;
+}
+
+
+bool ProvisioningService::IsValidPassword(
+    const String& password)
+{
+    size_t length =
+        password.length();
+
+    if (length == 0) return true;
+
+    if (length >= 8 && length <= 63) return true;
+
+    if (length != 64) return false;
+
+    for (size_t i = 0; i < length; i++)
+    {
+        if (!isHexadecimalDigit(password[i])) return false;
+    }
+
+    return true;
+}
+
+
+bool ProvisioningService::IsValidUrl(
+    const String& url)
+{
+    if (url.length() > 128 ||
+        !url.startsWith("http://"))
+    {
+        return false;
+    }
+
+    String rest =
+        url.substring(7);
+
+    if (rest.indexOf('/') >= 0 ||
+        rest.indexOf('?') >= 0)
+    {
+        return false;
+    }
+
+    int colon =
+        rest.indexOf(':');
+
+    String host =
+        colon < 0 ? rest : rest.substring(0, colon);
+
+    if (host.length() == 0)
+    {
+        return false;
+    }
+
+    if (colon >= 0)
+    {
+        String port =
+            rest.substring(colon + 1);
+
+        if (port.length() == 0 || port.length() > 5) return false;
+
+        for (size_t i = 0; i < port.length(); i++)
+        {
+            if (!isDigit(port[i])) return false;
+        }
+
+        long value = port.toInt();
+
+        if (value < 1 || value > 65535) return false;
+    }
+
+    return true;
+}
+
+
+String ProvisioningService::HostFromUrl(
+    const String& url)
+{
+    String rest =
+        url.startsWith("http://") ? url.substring(7) : url;
+
+    int end =
+        rest.length();
+
+    int colon = rest.indexOf(':');
+    int slash = rest.indexOf('/');
+
+    if (colon >= 0 && colon < end) end = colon;
+    if (slash >= 0 && slash < end) end = slash;
+
+    return rest.substring(0, end);
 }

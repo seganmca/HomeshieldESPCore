@@ -136,3 +136,92 @@ void StorageService::SaveWifiCredentials(
         WifiPassword,
         password);
 }
+
+
+bool StorageService::LoadProvisioningConfig(
+    ProvisioningConfig& config)
+{
+    _preferences.begin(
+        Namespace,
+        true);
+
+    bool provisioned =
+        _preferences.getInt(ProvisioningState, 0) == 1;
+
+    if (provisioned)
+    {
+        config.wifiSsid =
+            _preferences.getString(WifiSsid, "");
+
+        config.wifiPassword =
+            _preferences.getString(WifiPassword, "");
+
+        config.controlServerUrl =
+            _preferences.getString(ControlServerUrl, "");
+    }
+
+    _preferences.end();
+
+    return provisioned &&
+        config.wifiSsid.length() > 0 &&
+        config.controlServerUrl.length() > 0;
+}
+
+
+bool StorageService::SaveProvisioningConfig(
+    const ProvisioningConfig& config)
+{
+    if (!_preferences.begin(
+            Namespace,
+            false))
+    {
+        return false;
+    }
+
+    // Removed first: from here until the last write the board is not
+    // provisioned, whatever else is on flash.
+    _preferences.remove(ProvisioningState);
+
+    _preferences.putString(WifiSsid, config.wifiSsid);
+    _preferences.putString(WifiPassword, config.wifiPassword);
+    _preferences.putString(ControlServerUrl, config.controlServerUrl);
+    _preferences.putInt(ProvisioningVersion, CurrentProvisioningVersion);
+
+    // Verified by reading back rather than from the put* return values:
+    // putString returns the length written, which is 0 for an open network's
+    // empty password whether or not it succeeded.
+    bool written =
+        _preferences.getString(WifiSsid, "") == config.wifiSsid &&
+        _preferences.isKey(WifiPassword) &&
+        _preferences.getString(WifiPassword, "") == config.wifiPassword &&
+        _preferences.getString(ControlServerUrl, "") == config.controlServerUrl &&
+        _preferences.getInt(ProvisioningVersion, 0) == CurrentProvisioningVersion;
+
+    // The commit marker, last.
+    if (written)
+    {
+        written =
+            _preferences.putInt(ProvisioningState, 1) > 0 &&
+            _preferences.getInt(ProvisioningState, 0) == 1;
+    }
+
+    _preferences.end();
+
+    return written;
+}
+
+
+void StorageService::ClearProvisioningConfig()
+{
+    _preferences.begin(
+        Namespace,
+        false);
+
+    _preferences.remove(ProvisioningState);
+    _preferences.remove(WifiSsid);
+    _preferences.remove(WifiPassword);
+    _preferences.remove(ControlServerUrl);
+    _preferences.remove(ProvisioningVersion);
+
+    _preferences.end();
+}
