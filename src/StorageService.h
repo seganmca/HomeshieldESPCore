@@ -70,8 +70,15 @@ public:
     bool SaveProvisioningConfig(
         const ProvisioningConfig& config);
 
-    // Removes the provisioning keys only. The hardware identity is the eFuse
-    // MAC and is never stored here, so nothing about it is touched.
+    // Removes the provisioning keys, and the Sensor Hub node registry with
+    // them. The hardware identity is the eFuse MAC and is never stored here, so
+    // nothing about it is touched.
+    //
+    // Milestone 38 (decision A38-8). The node registry lives in its own
+    // namespace and would otherwise survive a reset - and a hub being
+    // re-onboarded is starting over, possibly in a different home. Carrying the
+    // old children across would declare a stranger's sensors to a new Control
+    // Server and create child Devices for hardware that is not there.
     void ClearProvisioningConfig();
 
 private:
@@ -86,6 +93,11 @@ private:
 
 
     static constexpr const char* Namespace = "homeshield";
+
+    // Milestone 38. The Sensor Hub's node registry, cleared alongside the
+    // provisioning configuration. Declared here rather than only in EspNowHub
+    // so the two agree about the name; EspNowHub owns the schema inside it.
+    static constexpr const char* NodeRegistryNamespace = "hs_nodes";
 
     static constexpr const char* WifiSsid = "wifi_ssid";
 

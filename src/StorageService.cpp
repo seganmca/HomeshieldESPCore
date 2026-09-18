@@ -217,11 +217,31 @@ void StorageService::ClearProvisioningConfig()
         Namespace,
         false);
 
+    // The commit marker FIRST. A power cut anywhere after this line leaves a
+    // board that is unprovisioned with some stale keys, which is recoverable;
+    // the other order would leave one that believes it is provisioned with its
+    // Wi-Fi credentials gone.
     _preferences.remove(ProvisioningState);
     _preferences.remove(WifiSsid);
     _preferences.remove(WifiPassword);
     _preferences.remove(ControlServerUrl);
     _preferences.remove(ProvisioningVersion);
+
+    _preferences.end();
+
+
+    // Milestone 38 (decision A38-8). The Sensor Hub's node registry goes with
+    // the provisioning configuration.
+    //
+    // clear() rather than key-by-key removal because the registry is a whole
+    // namespace of its own and its record count is exactly what is being
+    // discarded. A board that is not a hub has no such namespace and this is a
+    // no-op on it.
+    _preferences.begin(
+        NodeRegistryNamespace,
+        false);
+
+    _preferences.clear();
 
     _preferences.end();
 }

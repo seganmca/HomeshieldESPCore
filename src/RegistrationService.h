@@ -21,13 +21,20 @@ public:
     // at HomeShieldClass's declared array, which lives for the
     // lifetime of the program - the declaration is complete before
     // this service is constructed and never changes afterwards.
+    //
+    // Milestone 38: capabilities is the same arrangement - a pointer into
+    // HomeShieldClass's array, not owned and not copied. It is declared before
+    // the module starts and never changes afterwards, so unlike the device
+    // count it needs no re-read path.
     RegistrationService(
         StorageService& storageService,
         HttpService& httpService,
         const String& moduleType,
         const String& firmwareVersion,
         const DeclaredDevice* devices,
-        int deviceCount);
+        int deviceCount,
+        const String* capabilities = nullptr,
+        int capabilityCount = 0);
 
     ~RegistrationService();
 
@@ -62,6 +69,32 @@ public:
     // Module.Id from the last successful registration response, or 0.
     long ModuleId() const;
 
+
+    // --------------------------------------------------
+    // Milestone 38
+    // --------------------------------------------------
+    //
+    // Re-reads the declared array - the SAME pointer, a new count - and
+    // registers again.
+    //
+    // This exists because a Sensor Hub gains a child at runtime, which nothing
+    // before M38 could do: the declared array's ADDRESS never moves, but its
+    // count was copied by value here at construction, so appending to it
+    // upstream would otherwise be invisible to this service.
+    //
+    // Takes _urlLock while it writes the count, so the registration task can
+    // never read a torn value, and clears _registered and the attempt counters
+    // so the caller reads only its own outcome - exactly what
+    // SetControlServerUrl does for onboarding.
+    //
+    // The registration task picks this up within a second and POSTs the WHOLE
+    // declaration: every persisted node plus the new one. There is no
+    // incremental "add one child" call, and there must not be - the Control
+    // Server treats a registration as the complete truth about a module's
+    // children and disables any it stops hearing about.
+    void Redeclare(
+        int deviceCount);
+
 private:
 
     static void RegistrationTaskEntry(
@@ -80,7 +113,13 @@ private:
     String _firmwareVersion;
 
     const DeclaredDevice* _devices = nullptr;
-    int _deviceCount = 0;
+
+    // Guarded by _urlLock from milestone 38 onward, because Redeclare() writes
+    // it from the application task while the registration task reads it.
+    volatile int _deviceCount = 0;
+
+    const String* _capabilities = nullptr;
+    int _capabilityCount = 0;
 
 
     // Guards _controlServerUrl. The loop sets it; the task reads it.

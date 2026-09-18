@@ -161,14 +161,24 @@ void HomeShieldClass::beginModule(
     const String& moduleType,
     const String& firmwareVersion)
 {
+    // Milestone 38 (decision A38-4). ZERO devices is now legitimate, and this
+    // refusal is gone rather than relaxed.
+    //
+    // A Sensor Hub registers before it has adopted anything, and it must: the
+    // Control Server cannot be told to start a discovery on a module it has
+    // never heard of. It declares no child because it HAS no child - there is
+    // deliberately no representative or placeholder device standing in for the
+    // nodes it does not have yet.
+    //
+    // The module type below is what makes that safe. With no devices there is
+    // nothing to derive a type from, so a type must be declared, and the check
+    // that follows is now load-bearing for two cases rather than one.
     if (_deviceCount == 0)
     {
         Serial.println(
             "[HomeShield] beginModule() was called with no devices declared. "
-            "Call addDevice(deviceKey, deviceType) for each device first. "
-            "Nothing has been started.");
-
-        return;
+            "That is expected for a Sensor Hub before any node has been "
+            "onboarded; it is a mistake on any other board.");
     }
 
 
@@ -229,7 +239,9 @@ void HomeShieldClass::Start(
             _moduleType,
             _firmwareVersion,
             _devices,
-            _deviceCount);
+            _deviceCount,
+            _capabilityCount > 0 ? _capabilities : nullptr,
+            _capabilityCount);
 
 
     if (_resetPin >= 0)
@@ -410,6 +422,44 @@ void HomeShieldClass::loop()
 
 
     /*
+     * Module commands.
+     *
+     * Drained HERE, immediately after the MQTT client has finished its own
+     * loop, so the handler runs with PubSubClient idle and may publish freely.
+     * Dispatch() only queues; see _moduleCommandInbox for why.
+     */
+    if (_hasModuleCommand)
+    {
+        char command[MAX_MODULE_COMMAND + 1];
+
+        portENTER_CRITICAL(&_moduleCommandLock);
+
+        memcpy(command, _moduleCommandInbox, sizeof(command));
+
+        _hasModuleCommand = false;
+
+        portEXIT_CRITICAL(&_moduleCommandLock);
+
+
+        if (_moduleCommandHandler != nullptr)
+        {
+            Serial.print(
+                "[HomeShield] Module command dispatched: ");
+
+            Serial.println(command);
+
+            _moduleCommandHandler(String(command));
+        }
+        else
+        {
+            Serial.println(
+                "[HomeShield] A module command was queued but this sketch has "
+                "no module command handler.");
+        }
+    }
+
+
+    /*
      * Heartbeat.
      */
     if (MqttConnected())
@@ -500,6 +550,241 @@ void HomeShieldClass::setCommandHandler(
 }
 
 
+void HomeShieldClass::setModuleCommandHandler(
+    ModuleCommandHandler handler)
+{
+    _moduleCommandHandler =
+        handler;
+}
+
+
+// ==================================================
+// Module capabilities (milestone 38)
+// ==================================================
+
+bool HomeShieldClass::declareModuleCapability(
+    const String& capabilityKey)
+{
+    // Refused after the module has started, for exactly the reason addDevice()
+    // is: the registration task reads this array as it stands the moment it is
+    // created, so a late declaration would be sent on some registrations and
+    // not others depending on timing.
+    if (_started)
+    {
+        Serial.println(
+            "[HomeShield] declareModuleCapability() was called after the module "
+            "had already started. It is ignored. Declare capabilities BEFORE "
+            "begin()/beginModule().");
+
+        return false;
+    }
+
+
+    if (capabilityKey.length() == 0)
+    {
+        Serial.println(
+            "[HomeShield] declareModuleCapability() refused: the capability key "
+            "is empty.");
+
+        return false;
+    }
+
+
+    for (int i = 0; i < _capabilityCount; i++)
+    {
+        // Already declared. Not an error - a sketch restructured so that two
+        // components both assert the same capability is fine, and refusing it
+        // would make the order they run in matter.
+        if (_capabilities[i] == capabilityKey) return true;
+    }
+
+
+    if (_capabilityCount >= MAX_CAPABILITIES)
+    {
+        Serial.print(
+            "[HomeShield] declareModuleCapability() refused: this library "
+            "declares at most ");
+
+        Serial.print(MAX_CAPABILITIES);
+
+        Serial.print(
+            " capabilities per module, and '");
+
+        Serial.print(capabilityKey);
+
+        Serial.println(
+            "' would exceed it.");
+
+        return false;
+    }
+
+
+    _capabilities[_capabilityCount] =
+        capabilityKey;
+
+    _capabilityCount++;
+
+    return true;
+}
+
+
+// ==================================================
+// Gaining a device at runtime (milestone 38)
+// ==================================================
+
+bool HomeShieldClass::addDeviceAtRuntime(
+    const String& deviceKey,
+    const String& deviceType,
+    const String& defaultName)
+{
+    if (!_started ||
+        _registrationService == nullptr)
+    {
+        Serial.println(
+            "[HomeShield] addDeviceAtRuntime() was called before the module "
+            "started. Use addDevice() during setup instead.");
+
+        return false;
+    }
+
+
+    if (deviceKey.length() == 0 ||
+        deviceType.length() == 0)
+    {
+        Serial.println(
+            "[HomeShield] addDeviceAtRuntime() refused: a device needs both a "
+            "device key and a device type.");
+
+        return false;
+    }
+
+
+    // Already declared. Refused rather than treated as success: the caller is
+    // about to persist a node on the strength of this, and a key collision
+    // means the thing it thinks it adopted is not the thing that is there.
+    if (IndexOf(deviceKey) >= 0)
+    {
+        Serial.print(
+            "[HomeShield] addDeviceAtRuntime() refused: device key '");
+
+        Serial.print(deviceKey);
+
+        Serial.println(
+            "' is already declared.");
+
+        return false;
+    }
+
+
+    if (_deviceCount >= MAX_DEVICES)
+    {
+        Serial.print(
+            "[HomeShield] addDeviceAtRuntime() refused: this library declares "
+            "at most ");
+
+        Serial.print(MAX_DEVICES);
+
+        Serial.println(
+            " devices per module.");
+
+        return false;
+    }
+
+
+    // Written BEFORE the count moves. The registration task reads the array
+    // through a pointer it already holds, so a count that advanced first would
+    // expose a half-written slot for as long as the next three assignments take.
+    _devices[_deviceCount].deviceKey = deviceKey;
+    _devices[_deviceCount].deviceType = deviceType;
+    _devices[_deviceCount].defaultName = defaultName;
+
+
+    _reRegistering = true;
+
+    _reRegistrationResult =
+        ReRegistration::InProgress;
+
+
+    // Publishes the new count under the service's own lock and clears the
+    // registered flag, so the task re-registers within a second and the outcome
+    // that follows belongs to THIS declaration.
+    _registrationService->Redeclare(
+        _deviceCount + 1);
+
+
+    _deviceCount++;
+
+
+    return true;
+}
+
+
+HomeShieldClass::ReRegistration
+HomeShieldClass::reRegistrationState()
+{
+    if (_registrationService == nullptr)
+    {
+        return ReRegistration::Idle;
+    }
+
+
+    // Settled already. Held rather than recomputed, because the counters it was
+    // derived from keep moving - a hub that reconnects later would otherwise
+    // see a long-finished failure turn into a success.
+    if (!_reRegistering)
+    {
+        return _reRegistrationResult;
+    }
+
+
+    if (_registrationService->IsRegistered())
+    {
+        _reRegistering = false;
+
+        _reRegistrationResult =
+            ReRegistration::Succeeded;
+
+        return _reRegistrationResult;
+    }
+
+
+    int statusCode =
+        _registrationService->LastStatusCode();
+
+
+    // A 4xx is the Control Server refusing the declaration itself - an unknown
+    // device type, a bad key, a duplicate. Retrying cannot fix it, so it fails
+    // now rather than in thirty seconds.
+    bool refused =
+        statusCode >= 400 &&
+        statusCode < 500;
+
+
+    if (refused ||
+        _registrationService->FailedAttempts() >=
+            MAX_REREGISTRATION_FAILURES)
+    {
+        _reRegistering = false;
+
+        _reRegistrationResult =
+            ReRegistration::Failed;
+
+        return _reRegistrationResult;
+    }
+
+
+    return ReRegistration::InProgress;
+}
+
+
+int HomeShieldClass::lastRegistrationStatus()
+{
+    if (_registrationService == nullptr) return 0;
+
+    return _registrationService->LastStatusCode();
+}
+
+
 // ==================================================
 // Inbound commands
 // ==================================================
@@ -541,8 +826,28 @@ void HomeShieldClass::OnMqttMessage(
 void HomeShieldClass::Dispatch(
     const String& payload)
 {
-    if (_commandHandler == nullptr)
+    // --------------------------------------------------
+    // The guard is PER PATH, and that is the fix
+    // --------------------------------------------------
+    //
+    // This used to be `if (_commandHandler == nullptr) return;` - a single
+    // check, at the top, written when a command could only ever be for a
+    // device.
+    //
+    // A Sensor Hub sets setModuleCommandHandler() and NOTHING else, because in
+    // milestone 38 it has no child devices to command. So _commandHandler was
+    // null on every hub, and every module command was discarded on the first
+    // line of this function - before the scope check below could see it, and
+    // before anything printed. The board logged "Command Received" from the
+    // MQTT callback and then went silent, which is exactly what it looked like.
+    //
+    // Bail only when there is no handler of EITHER kind. Each path checks its
+    // own handler where it is actually used.
+    if (_commandHandler == nullptr &&
+        _moduleCommandHandler == nullptr)
+    {
         return;
+    }
 
 
     String body = payload;
@@ -568,6 +873,75 @@ void HomeShieldClass::Dispatch(
 
             return;
         }
+
+
+        // --------------------------------------------------
+        // Milestone 38: module scope
+        // --------------------------------------------------
+        //
+        // Read BEFORE any device is resolved, and it returns rather than
+        // falling through, because a module-scoped command is not about a
+        // device and there is nothing below that could do anything sensible
+        // with it. A Sensor Hub holds zero children when it is new and several
+        // later, so both of the device path's outcomes - "no such key" and "no
+        // single device to fall back to" - would simply drop it.
+        //
+        // Anything WITHOUT scope == "module" continues past here exactly as it
+        // always has. That is the whole compatibility story: every message any
+        // existing board has ever received is missing this field, takes the
+        // branch below, and behaves identically.
+        String scope;
+
+        if (JsonLite::ReadString(body, "scope", scope) &&
+            scope == "module")
+        {
+            if (_moduleCommandHandler == nullptr)
+            {
+                DEBUG_VALUE(
+                    "Dropped a module command: this sketch has no module "
+                    "command handler. Command was: ",
+                    command);
+
+                return;
+            }
+
+            // QUEUED, not called. See _moduleCommandInbox: running it here
+            // would publish from inside PubSubClient's own receive callback,
+            // into the buffer PubSubClient is still reading.
+            if (command.length() > MAX_MODULE_COMMAND)
+            {
+                Serial.print(
+                    "[HomeShield] Dropped a module command longer than ");
+
+                Serial.print(MAX_MODULE_COMMAND);
+
+                Serial.println(" characters.");
+
+                return;
+            }
+
+            portENTER_CRITICAL(&_moduleCommandLock);
+
+            strncpy(
+                _moduleCommandInbox,
+                command.c_str(),
+                MAX_MODULE_COMMAND);
+
+            _moduleCommandInbox[MAX_MODULE_COMMAND] = '\0';
+
+            _hasModuleCommand = true;
+
+            portEXIT_CRITICAL(&_moduleCommandLock);
+
+
+            Serial.print(
+                "[HomeShield] Module command queued: ");
+
+            Serial.println(command);
+
+            return;
+        }
+
 
         // A missing deviceKey in an envelope is treated the same as
         // a bare command, which is the honest reading: the message
@@ -619,6 +993,20 @@ void HomeShieldClass::Dispatch(
 
             return;
         }
+    }
+
+
+    // Checked HERE rather than at the top of the function: a module-only
+    // sketch legitimately has no device command handler, and a device command
+    // arriving at one is worth saying out loud rather than silently dropping.
+    if (_commandHandler == nullptr)
+    {
+        DEBUG_VALUE(
+            "Dropped a device command: this sketch has no device command "
+            "handler. Command was: ",
+            command);
+
+        return;
     }
 
 
@@ -690,6 +1078,20 @@ bool HomeShieldClass::publishEvent(
     }
 
 
+    return publishEvent(
+        String(""),
+        eventType,
+        payloadJson);
+}
+
+
+bool HomeShieldClass::publishModuleEvent(
+    const String& eventType,
+    const String& payloadJson)
+{
+    // The private, key-taking overload with an EMPTY key, which is what omits
+    // the deviceKey field from the envelope. The Control Server routes this by
+    // hardwareId and eventType; no device is named because none is meant.
     return publishEvent(
         String(""),
         eventType,

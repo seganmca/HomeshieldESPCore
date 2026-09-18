@@ -38,17 +38,29 @@ namespace ModuleTypes
 
     // A HomeShield controller with no more specific type. The
     // honest fallback, not a placeholder.
+    //
+    // Milestone 38: also what a Sensor Hub registers as. A hub is
+    // not given a type of its own - a type decides nothing, and
+    // what makes a hub a hub is the node-onboarding CAPABILITY it
+    // declares. See ModuleCapabilities.h.
     constexpr const char* Esp32Generic  = "esp32-generic";
 
-    constexpr const char* DoorSensorNode = "door-sensor-node";
-
-    constexpr const char* TankSensorNode = "tank-sensor-node";
-
-    constexpr const char* SirenNode      = "siren-node";
-
-    constexpr const char* PirNode        = "pir-node";
-
-    constexpr const char* MmWaveNode     = "mmwave-node";
-
-    constexpr const char* AiVisionNode   = "ai-vision-node";
+    // ------------------------------------------------------------
+    // Milestone 38: the six sensor-node types are GONE.
+    // ------------------------------------------------------------
+    //
+    //     door-sensor-node   tank-sensor-node   siren-node
+    //     pir-node           mmwave-node        ai-vision-node
+    //
+    // They described a sensor that was its own Module. A sensor
+    // node is a DEVICE hosted by a Sensor Hub's Module, so the
+    // thing those keys named no longer exists.
+    //
+    // Nothing in this library or in any sketch read them - every
+    // sketch declares a device type and lets the Control Server
+    // derive the module type - so removing them is a deletion and
+    // not a migration on this side. The Control Server rewrites
+    // the rows that still carry the old values.
+    //
+    // No replacement node types are introduced.
 }

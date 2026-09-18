@@ -118,7 +118,9 @@ HttpResult HttpService::RegisterModule(
     const String& moduleType,
     const String& firmwareVersion,
     const DeclaredDevice* devices,
-    int deviceCount)
+    int deviceCount,
+    const String* capabilities,
+    int capabilityCount)
 {
     String request =
         "{"
@@ -135,6 +137,28 @@ HttpResult HttpService::RegisterModule(
             "\"moduleType\":\"" +
             JsonLite::Escape(moduleType) +
             "\",";
+    }
+
+
+    // Milestone 38. Omitted when there is nothing to declare, exactly as
+    // moduleType is: an absent array and an empty one mean the same thing to
+    // the Control Server, and omitting it keeps every pre-M38 board's
+    // registration body byte-identical to what it has always sent.
+    if (capabilities != nullptr && capabilityCount > 0)
+    {
+        request += "\"capabilities\":[";
+
+        for (int i = 0; i < capabilityCount; i++)
+        {
+            if (i > 0) request += ",";
+
+            request +=
+                "\"" +
+                JsonLite::Escape(capabilities[i]) +
+                "\"";
+        }
+
+        request += "],";
     }
 
 

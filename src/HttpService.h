@@ -54,12 +54,20 @@ public:
     //
     // Milestone 37: controlServerUrl is a parameter. It is no longer compiled
     // in; RegistrationService holds the URL onboarding delivered.
+    //
+    // Milestone 38: capabilities is what a module can DO, as opposed to what
+    // kind of thing it is. Keys come from ModuleCapabilities.h. The array is
+    // OMITTED entirely when the count is zero, which is what every board except
+    // the Sensor Hub sends - so no existing registration body changes by a
+    // single byte, and no flashed board needs reflashing for this milestone.
     HttpResult RegisterModule(
         const String& controlServerUrl,
         const String& moduleType,
         const String& firmwareVersion,
         const DeclaredDevice* devices,
-        int deviceCount);
+        int deviceCount,
+        const String* capabilities = nullptr,
+        int capabilityCount = 0);
 
 
     // --------------------------------------------------

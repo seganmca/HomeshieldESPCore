@@ -12,13 +12,17 @@ RegistrationService::RegistrationService(
     const String& moduleType,
     const String& firmwareVersion,
     const DeclaredDevice* devices,
-    int deviceCount)
+    int deviceCount,
+    const String* capabilities,
+    int capabilityCount)
     : _storageService(storageService),
       _httpService(httpService),
       _moduleType(moduleType),
       _firmwareVersion(firmwareVersion),
       _devices(devices),
-      _deviceCount(deviceCount)
+      _deviceCount(deviceCount),
+      _capabilities(capabilities),
+      _capabilityCount(capabilityCount)
 {
     _urlLock =
         xSemaphoreCreateMutex();
@@ -156,21 +160,32 @@ bool RegistrationService::RegisterOnce()
     }
 
 
-    // Nothing to declare means nothing to register. HomeShieldClass
-    // refuses to construct this service in that state, so reaching
-    // here would be a bug rather than a field condition.
+    String controlServerUrl;
+
+    int deviceCount;
+
+    // Both read under the one lock. The count is what Redeclare() writes, and
+    // reading it separately from the URL would let a re-declaration land
+    // between the two and register a device list this attempt never saw.
+    xSemaphoreTake(_urlLock, portMAX_DELAY);
+    controlServerUrl = _controlServerUrl;
+    deviceCount = _deviceCount;
+    xSemaphoreGive(_urlLock);
+
+
+    // Milestone 38 (decision A38-4). ZERO devices is legitimate now, and only
+    // when a module type was declared: that is a Sensor Hub with no nodes yet,
+    // and it must register so it is reachable and can be sent a discovery.
+    //
+    // With no module type there would be nothing to derive one from and nothing
+    // to declare, which is a bug rather than a field condition - HomeShieldClass
+    // refuses that combination before this service is constructed.
     if (_devices == nullptr ||
-        _deviceCount <= 0)
+        deviceCount < 0 ||
+        (deviceCount == 0 && _moduleType.length() == 0))
     {
         return false;
     }
-
-
-    String controlServerUrl;
-
-    xSemaphoreTake(_urlLock, portMAX_DELAY);
-    controlServerUrl = _controlServerUrl;
-    xSemaphoreGive(_urlLock);
 
 
     // Not onboarded yet, or a provisioning attempt was abandoned. Nothing to
@@ -191,7 +206,9 @@ bool RegistrationService::RegisterOnce()
             _moduleType,
             _firmwareVersion,
             _devices,
-            _deviceCount);
+            deviceCount,
+            _capabilities,
+            _capabilityCount);
 
 
     if (result.response.length() > 0)
@@ -268,6 +285,30 @@ bool RegistrationService::IsRegistered() const
 void RegistrationService::Reset()
 {
     _registered = false;
+}
+
+
+void RegistrationService::Redeclare(
+    int deviceCount)
+{
+    xSemaphoreTake(_urlLock, portMAX_DELAY);
+    _deviceCount = deviceCount;
+    xSemaphoreGive(_urlLock);
+
+
+    // Cleared so the caller reads only the outcome of THIS declaration. A hub
+    // that has been registered for a week would otherwise see a stale zero
+    // failure count and a stale success and conclude the new child had landed.
+    _failedAttempts = 0;
+
+    _lastStatusCode = 0;
+
+    _registered = false;
+
+
+    DEBUG_VALUE(
+        "Re-declaring the module. Devices now: ",
+        deviceCount);
 }
 
 
