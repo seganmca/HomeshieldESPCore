@@ -21,13 +21,21 @@
 // A module type is PRESENTATIONAL (decision D2): it drives card
 // layout and iconography in the app and decides nothing about
 // behaviour. A type this build of the Control Server does not
-// know still registers and still works - it is recorded as
-// "esp32-generic". That is the opposite of a device type, which
-// decides capability and is refused if unknown.
+// know still registers and still works - since milestone 39 it is
+// recorded as "mono-device" rather than "esp32-generic". That is
+// the opposite of a device type, which decides capability and is
+// refused if unknown.
 //
 // A single-device board does not need any of these: HomeShield's
 // begin(deviceType, firmwareVersion) declares no module type and
-// the Control Server derives it from the one declared device.
+// the Control Server derives it from the one declared device -
+// "camera" for a camera, "mono-device" for anything else.
+//
+// Milestone 39: "esp32-generic" is therefore no longer produced by
+// derivation or by the unknown-type fallback. A module carries it
+// only when a sketch declared it, which in this tree means a
+// Sensor Hub - and that is what lets the app offer Add Node from
+// the module type alone.
 // ============================================================
 
 namespace ModuleTypes
@@ -44,6 +52,37 @@ namespace ModuleTypes
     // what makes a hub a hub is the node-onboarding CAPABILITY it
     // declares. See ModuleCapabilities.h.
     constexpr const char* Esp32Generic  = "esp32-generic";
+
+    // ------------------------------------------------------------
+    // Milestone 39: two new types.
+    // ------------------------------------------------------------
+    //
+    // Neither is a type a sketch normally declares. Both are what
+    // the Control Server DERIVES for a board that declares one
+    // device and no module type - that is, a board whose sketch
+    // calls begin(deviceType, firmwareVersion). They are listed
+    // here because this header mirrors ModuleTypeKeys.cs and the
+    // two must not drift, not because a sketch is expected to pass
+    // them to beginModule().
+
+    // A controller with exactly one addressable function on it -
+    // the Light Switch, a door sensor, a siren, a tank sensor.
+    //
+    // The app draws it as the ordinary Regular Device Card. It
+    // exists because the card is now chosen from the module TYPE
+    // and never from the number of devices the module holds, so a
+    // one-function board needs a type that says so.
+    constexpr const char* MonoDevice    = "mono-device";
+
+    // A camera controller running HomeShield firmware - an
+    // ESP32-CAM.
+    //
+    // Derived from the declared device type "camera", so the
+    // Camera sketch needs no change. NOT the same thing as
+    // "camera-group", which is the logical container the Control
+    // Server makes for cameras reached over the network and which
+    // no controller may declare.
+    constexpr const char* Camera        = "camera";
 
     // ------------------------------------------------------------
     // Milestone 38: the six sensor-node types are GONE.
