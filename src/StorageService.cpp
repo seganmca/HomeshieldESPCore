@@ -211,11 +211,14 @@ bool StorageService::SaveProvisioningConfig(
 }
 
 
-void StorageService::ClearProvisioningConfig()
+bool StorageService::ClearProvisioningConfig()
 {
-    _preferences.begin(
-        Namespace,
-        false);
+    if (!_preferences.begin(
+            Namespace,
+            false))
+    {
+        return false;
+    }
 
     // The commit marker FIRST. A power cut anywhere after this line leaves a
     // board that is unprovisioned with some stale keys, which is recoverable;
@@ -227,6 +230,18 @@ void StorageService::ClearProvisioningConfig()
     _preferences.remove(ControlServerUrl);
     _preferences.remove(ProvisioningVersion);
 
+
+    // Milestone 40. Read back, in the same open handle, before anything is
+    // reported as done. remove() returns a bool on some cores and nothing on
+    // others; asking the namespace whether the key is still there is the one
+    // question that means the same thing everywhere.
+    bool cleared =
+        !_preferences.isKey(ProvisioningState) &&
+        !_preferences.isKey(WifiSsid) &&
+        !_preferences.isKey(WifiPassword) &&
+        !_preferences.isKey(ControlServerUrl) &&
+        !_preferences.isKey(ProvisioningVersion);
+
     _preferences.end();
 
 
@@ -237,11 +252,27 @@ void StorageService::ClearProvisioningConfig()
     // namespace of its own and its record count is exactly what is being
     // discarded. A board that is not a hub has no such namespace and this is a
     // no-op on it.
-    _preferences.begin(
-        NodeRegistryNamespace,
-        false);
+    if (_preferences.begin(
+            NodeRegistryNamespace,
+            false))
+    {
+        // clear() reports whether the namespace was actually emptied. The
+        // registry's key names belong to EspNowHub, not to this file, so its
+        // own answer is the right thing to trust rather than a second copy of
+        // its schema spelled out here.
+        cleared =
+            _preferences.clear() &&
+            cleared;
 
-    _preferences.clear();
+        _preferences.end();
+    }
+    else
+    {
+        // A board that is not a hub has never created this namespace. Failing
+        // to open it for writing is the normal case there, not a fault, and
+        // clear() on a namespace that does not exist has nothing to prove.
+    }
 
-    _preferences.end();
+
+    return cleared;
 }

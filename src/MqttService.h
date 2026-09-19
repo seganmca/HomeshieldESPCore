@@ -20,8 +20,12 @@ public:
         const String& topic,
         const String& message);
 
+    // qos is the SUBSCRIPTION quality of service. 0 for everything that
+    // existed before milestone 40, which is what the default preserves; 1 for
+    // a topic whose one message is sent once and never repeated.
     void addSubscription(
-        const String& topic);
+        const String& topic,
+        uint8_t qos = 0);
 
     void setCallback(
         MQTT_CALLBACK_SIGNATURE);
@@ -45,6 +49,9 @@ private:
 
     String _subscriptions[
         MAX_SUBSCRIPTIONS];
+
+    uint8_t _subscriptionQos[
+        MAX_SUBSCRIPTIONS] = {0};
 
     int _subscriptionCount = 0;
 

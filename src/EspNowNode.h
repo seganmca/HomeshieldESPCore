@@ -125,7 +125,15 @@ private:
         // sent. Restarting shortly.
         Confirmed,
 
-        // Booted from NVS. Does nothing, forever.
+        // Milestone 40. Booted from NVS and checking, before it
+        // settles, that the hub it stored still has it. Sweeps the
+        // channels sending RELATIONSHIP_CHECK to that one hub, and
+        // ends in Provisioned - whether the hub says VALID or says
+        // nothing at all. Only an explicit REVOKED clears NVS.
+        RelationshipCheck,
+
+        // Booted from NVS, relationship settled. Does nothing,
+        // forever.
         Provisioned,
     };
 
@@ -141,6 +149,21 @@ private:
 
     void HandleAck(
         const HsDiscoveryAck& ack);
+
+    // Milestone 40.
+    void HandleRelationshipStatus(
+        const HsRelationshipStatus& status);
+
+    void SendRelationshipCheck();
+
+    // Stops checking and settles as provisioned, keeping the stored
+    // relationship. Used both for VALID and for "the hub never answered".
+    void SettleProvisioned(
+        const char* why);
+
+    // Removes the stored hub relationship. Returns whether it could be
+    // verified as gone.
+    bool ClearPersisted();
 
     void SendResponse();
 
@@ -265,6 +288,38 @@ private:
     static constexpr unsigned long RestartDelay = 500;
 
     unsigned long _confirmedAt = 0;
+
+
+    // --------------------------------------------------
+    // Relationship check (milestone 40)
+    // --------------------------------------------------
+    //
+    // Whether this node has a stored hub, as opposed to what state
+    // the loop is in. IsProvisioned() answers with THIS, so a
+    // sketch sees an adopted node as adopted throughout the check -
+    // which it is. The check can only take the relationship away,
+    // never grant one.
+    bool _persisted = false;
+
+    // The node sends one check per channel visit, so a full sweep
+    // is one attempt on every channel the hub could be on. Two
+    // sweeps - about 16 s - then it gives up and stays provisioned.
+    //
+    // Deliberately small. A hub that is powered off is the ordinary
+    // case, not a fault, and a node that kept sweeping would burn
+    // its battery to learn nothing. It asks again at the next boot.
+    static constexpr uint32_t MaxCheckSweeps = 2;
+
+    // The sweep count itself is _sweepsCompleted, which the discovery
+    // sweep already maintains - one counter, one sweep, whichever
+    // question is being asked on it.
+    //
+    // There is no retry beyond MaxCheckSweeps and no escalation:
+    // silence NEVER unprovisions. M40 requirement 6.
+
+    // The channel the last check was sent on, so the peer is
+    // re-pointed only when the sweep has actually moved.
+    uint8_t _peerChannel = 0;
 
 
     // --------------------------------------------------

@@ -79,7 +79,17 @@ public:
     // re-onboarded is starting over, possibly in a different home. Carrying the
     // old children across would declare a stranger's sensors to a new Control
     // Server and create child Devices for hardware that is not there.
-    void ClearProvisioningConfig();
+    //
+    // Milestone 40. Returns whether the clear could be VERIFIED: the commit
+    // marker and every provisioning key are read back after removal, and the
+    // node registry's count is re-read. A board that cannot prove its NVS is
+    // clear must say so - it is about to reboot expecting to be
+    // unprovisioned, and if it is wrong it comes back believing it still
+    // belongs to a household that has deleted it.
+    //
+    // The existing callers may ignore the result; the value is unchanged for
+    // them.
+    bool ClearProvisioningConfig();
 
 private:
 

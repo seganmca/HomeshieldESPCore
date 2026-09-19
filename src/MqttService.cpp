@@ -104,7 +104,8 @@ void MqttService::connect()
                 continue;
 
             _mqttClient.subscribe(
-                _subscriptions[i].c_str());
+                _subscriptions[i].c_str(),
+                _subscriptionQos[i]);
         }
     }
     else
@@ -140,10 +141,44 @@ bool MqttService::publish(
 
 
 void MqttService::addSubscription(
-    const String& topic)
+    const String& topic,
+    uint8_t qos)
 {
     if (topic.length() == 0)
         return;
+
+
+    // --------------------------------------------------
+    // Idempotent, and that is a fix rather than a nicety
+    // --------------------------------------------------
+    //
+    // HomeShieldClass re-subscribes on every Wi-Fi session: _mqttInitialized is
+    // cleared when the link drops and the whole initialisation block runs again
+    // when it returns. Before milestone 40 that appended a duplicate entry per
+    // reconnect, so a board that had lost Wi-Fi ten times filled the table and
+    // silently stopped subscribing to anything - including its own command
+    // topic.
+    //
+    // M40 makes that worse by adding a second topic, halving the number of
+    // reconnects a board survives, so it is dealt with here where the table is
+    // owned. An already-registered topic is re-subscribed on the broker (the
+    // session may be new) but does not take a second slot.
+    for (int i = 0; i < _subscriptionCount; i++)
+    {
+        if (_subscriptions[i] != topic)
+            continue;
+
+        _subscriptionQos[i] = qos;
+
+        if (_mqttClient.connected())
+        {
+            _mqttClient.subscribe(
+                topic.c_str(),
+                qos);
+        }
+
+        return;
+    }
 
 
     if (_subscriptionCount >=
@@ -156,6 +191,9 @@ void MqttService::addSubscription(
     }
 
 
+    _subscriptionQos[
+        _subscriptionCount] = qos;
+
     _subscriptions[
         _subscriptionCount++] =
             topic;
@@ -164,7 +202,8 @@ void MqttService::addSubscription(
     if (_mqttClient.connected())
     {
         _mqttClient.subscribe(
-            topic.c_str());
+            topic.c_str(),
+            qos);
     }
 }
 

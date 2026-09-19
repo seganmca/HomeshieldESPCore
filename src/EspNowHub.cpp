@@ -418,6 +418,18 @@ void EspNowHubClass::loop()
 
             HandleConfirm(confirm);
         }
+        else if (HsEspNow::ValidHeader(
+                     frame,
+                     length,
+                     MSG_RELATIONSHIP_CHECK,
+                     sizeof(HsRelationshipCheck)))
+        {
+            HsRelationshipCheck check;
+
+            memcpy(&check, frame, sizeof(check));
+
+            HandleRelationshipCheck(check);
+        }
         else
         {
             // Heard, but not ours, or not the shape we expect. Worth saying
@@ -1308,6 +1320,152 @@ void EspNowHubClass::HandleConfirm(
     Report(
         PHASE_IDENTITY_CONFIRMED,
         nullptr);
+}
+
+
+// ==================================================
+// Relationship check (milestone 40)
+// ==================================================
+//
+// A node that booted with this hub's MAC in its NVS is asking whether that is
+// still true. The registry IS the answer - the same array declarePersistedNodes()
+// re-declares children from - so this needs no network, no Control Server and
+// no session.
+//
+// Answered in ANY state, including mid-discovery. It writes nothing, it does
+// not touch _targetMac, _sessionId or _state, and the peer it adds is removed
+// again unless the discovery session already owned it. A node waking up must
+// not be able to disturb a household standing in front of a different sensor.
+//
+// The interesting case is the one M40 exists for: the hub was deleted, cleared
+// its own NVS and was re-onboarded, so its registry is EMPTY. Every node that
+// used to belong to it is then correctly told REVOKED, without the server ever
+// having to reach hardware that was asleep at the time.
+void EspNowHubClass::HandleRelationshipCheck(
+    const HsRelationshipCheck& check)
+{
+    // Addressed to this hub, and says so. ESP-NOW hands us frames we are the
+    // destination of, but the node's stored MAC is the thing being tested and
+    // it has to be the thing we compare.
+    if (memcmp(check.hubMac, _hubMac, 6) != 0)
+    {
+        return;
+    }
+
+
+    String nodeMacText =
+        HsEspNow::FormatMac(check.nodeMac);
+
+
+    bool adopted =
+        IsAdopted(nodeMacText);
+
+
+    HsRelationshipStatus status = {};
+
+    status.header.magic = HS_ESPNOW_MAGIC;
+    status.header.protocolVersion = HS_ESPNOW_VERSION;
+    status.header.msgType = MSG_RELATIONSHIP_STATUS;
+    status.header.sequence = 0;
+
+    // The NODE'S session id, echoed. This exchange belongs to the node and the
+    // hub's own _sessionId - which may be mid-discovery for somebody else -
+    // has nothing to do with it.
+    status.header.sessionId = check.header.sessionId;
+
+    memcpy(status.hubMac, _hubMac, 6);
+    memcpy(status.nodeMac, check.nodeMac, 6);
+
+    status.verdict =
+        adopted ? RELATIONSHIP_VALID : RELATIONSHIP_REVOKED;
+
+
+    // --------------------------------------------------
+    // The reply peer
+    // --------------------------------------------------
+    //
+    // Unicast needs a peer entry. If one already exists - because a discovery
+    // session is talking to this very node - it belongs to that session and is
+    // left completely alone.
+    //
+    // Otherwise ONE reusable slot is kept, and the previous occupant is
+    // evicted when the next node asks. It is deliberately not deleted straight
+    // after the send: esp_now_send() only QUEUES the frame, and removing the
+    // peer underneath it is how a reply gets dropped between "sent" and
+    // actually transmitted. Evicting on the NEXT check gives the current one
+    // all the time it needs, and one stale entry costs nothing against
+    // ESP-NOW's peer table.
+    if (!esp_now_is_peer_exist(check.nodeMac))
+    {
+        if (_replyPeerAdded &&
+            memcmp(_replyPeer, check.nodeMac, 6) != 0)
+        {
+            esp_now_del_peer(_replyPeer);
+
+            _replyPeerAdded = false;
+        }
+
+
+        esp_now_peer_info_t peer = {};
+
+        memcpy(peer.peer_addr, check.nodeMac, 6);
+
+        // The interface's channel. The node is sweeping and sent this from the
+        // channel this hub is pinned to, which is the one it is listening on
+        // right now.
+        peer.channel = 0;
+
+        peer.encrypt = false;
+
+        peer.ifidx = WIFI_IF_STA;
+
+        esp_err_t addResult = esp_now_add_peer(&peer);
+
+        if (addResult != ESP_OK &&
+            addResult != ESP_ERR_ESPNOW_EXIST)
+        {
+            Serial.print(
+                "[EspNowHub] Could not add ");
+
+            Serial.print(nodeMacText);
+
+            Serial.print(" as a peer to answer its relationship check: ");
+
+            Serial.println(esp_err_to_name(addResult));
+
+            return;
+        }
+
+
+        memcpy(_replyPeer, check.nodeMac, 6);
+
+        _replyPeerAdded = true;
+    }
+
+
+    esp_err_t sendResult =
+        esp_now_send(
+            check.nodeMac,
+            (const uint8_t*)&status,
+            sizeof(status));
+
+
+    Serial.print(
+        "[EspNowHub] Relationship check from ");
+
+    Serial.print(nodeMacText);
+
+    Serial.print(" -> ");
+
+    Serial.print(adopted ? "VALID" : "REVOKED");
+
+    Serial.print(" (registry holds ");
+
+    Serial.print(_nodeCount);
+
+    Serial.print(" node(s)) send=");
+
+    Serial.println(esp_err_to_name(sendResult));
 }
 
 

@@ -449,6 +449,45 @@ private:
         "homeshield/events";
 
 
+    // --------------------------------------------------
+    // Physical unprovisioning (milestone 40)
+    // --------------------------------------------------
+    //
+    // The Control Server publishes {"command":"UNPROVISION"} to
+    //
+    //     {hardwareId}/provisioning/cmd
+    //
+    // when the household deletes this module, so the board clears
+    // its HomeShield state and comes back onboardable instead of
+    // needing its NVS erased over USB.
+    //
+    // A SECOND topic, and not an envelope on the existing command
+    // topic, because it is not a command to a device or to a
+    // sketch: the framework acts on it and no handler is consulted.
+    // Keeping it separate means no sketch can receive it by
+    // accident and none has to know to ignore it.
+    //
+    // Subscribed at QoS 1. It is sent once, by a server that is
+    // about to forget this board exists, and nothing ever repeats
+    // it.
+    static constexpr const char* PROVISIONING_COMMAND_SUFFIX =
+        "/provisioning/cmd";
+
+    static constexpr const char* UNPROVISION_COMMAND =
+        "UNPROVISION";
+
+
+    // Set by the MQTT callback, acted on by loop(). NOT done inline,
+    // for the same reason a module command is not: the callback runs
+    // inside PubSubClient's own receive path, and this one ends in
+    // NVS writes and ESP.restart() - tearing the radio down from
+    // underneath the parser that is still reading the packet.
+    volatile bool _unprovisionRequested = false;
+
+    // The whole of the unprovisioning: clear, verify, restart.
+    void Unprovision();
+
+
     String _firmwareVersion;
 
     String _moduleType;

@@ -399,6 +399,17 @@ void HomeShieldClass::loop()
             topic);
 
 
+        // Milestone 40. The unprovisioning topic, subscribed alongside the
+        // command topic and at QoS 1 - the command is published once and
+        // nothing retries it. addSubscription() is idempotent, so the
+        // re-initialisation that follows every Wi-Fi reconnect re-subscribes
+        // both without consuming another slot.
+        _mqttService.addSubscription(
+            DeviceIdentity::GetHardwareId() +
+                PROVISIONING_COMMAND_SUFFIX,
+            1);
+
+
         _mqttInitialized =
             true;
 
@@ -419,6 +430,24 @@ void HomeShieldClass::loop()
      * connection attempt every few seconds.
      */
     _mqttService.loop();
+
+
+    /*
+     * Unprovisioning (milestone 40).
+     *
+     * Checked here, first among the drains and before the heartbeat, because
+     * it does not return: the board clears its configuration and restarts.
+     * Anything queued behind it belongs to a module that has just been
+     * deleted and has nowhere to go.
+     */
+    if (_unprovisionRequested)
+    {
+        _unprovisionRequested = false;
+
+        Unprovision();
+
+        return;
+    }
 
 
     /*
@@ -530,15 +559,13 @@ void HomeShieldClass::CheckResetButton()
     }
 
     Serial.println(
-        "[HomeShield] Provisioning reset. Clearing configuration and restarting.");
+        "[HomeShield] Provisioning reset button held for 5 s.");
 
-    _storageService.ClearProvisioningConfig();
-
-    WiFi.disconnect(true, true);
-
-    delay(100);
-
-    ESP.restart();
+    // Milestone 40. The same code the network UNPROVISION runs, deliberately.
+    // The button and the server command are two ways of asking for one thing,
+    // and a board that ended up in a different state depending on which was
+    // used would be a state nobody designed.
+    Unprovision();
 }
 
 
@@ -818,8 +845,120 @@ void HomeShieldClass::OnMqttMessage(
         message);
 
 
+    // --------------------------------------------------
+    // Milestone 40: which topic did this arrive on?
+    // --------------------------------------------------
+    //
+    // The topic was ignored until now, and correctly so - there was exactly
+    // one subscription and every message on it was a command. There are two
+    // now, and they mean entirely different things, so the routing is done
+    // HERE rather than by inspecting the payload: a message is unprovisioning
+    // because of where it was published, not because of what it happens to
+    // say. A device command that contained the word UNPROVISION must reach the
+    // sketch's handler untouched.
+    String topicText = topic != nullptr ? String(topic) : String();
+
+    if (topicText.endsWith(PROVISIONING_COMMAND_SUFFIX))
+    {
+        // The whole payload contract: {"command":"UNPROVISION"}. Anything else
+        // on this topic is refused rather than guessed at - the one action it
+        // can ask for is irreversible.
+        String command;
+
+        if (!JsonLite::ReadString(message, "command", command) ||
+            command != UNPROVISION_COMMAND)
+        {
+            Serial.print(
+                "[HomeShield] Ignored an unrecognised provisioning command: ");
+
+            Serial.println(message);
+
+            return;
+        }
+
+
+        Serial.println(
+            "[HomeShield] UNPROVISION received. Clearing provisioning after "
+            "this MQTT callback returns.");
+
+        // Recorded only. loop() does the clearing and the restart; see
+        // _unprovisionRequested.
+        _instance->_unprovisionRequested = true;
+
+        return;
+    }
+
+
     _instance->Dispatch(
         message);
+}
+
+
+// ==================================================
+// Physical unprovisioning (milestone 40)
+// ==================================================
+//
+// The counterpart of the five-second reset button, reached over the network
+// instead of with a finger, and it does the SAME thing by design rather than
+// by coincidence: one definition of "unprovisioned" and one piece of code that
+// produces it. Anything this path cleared that the button did not would be a
+// state no household could ever reach by hand.
+//
+// What is cleared: the Wi-Fi credentials, the Control Server URL, the
+// provisioning commit marker, and - on a Sensor Hub - the adopted-node
+// registry, which StorageService clears with them (A38-8).
+//
+// What is NOT touched, and cannot be: the factory MAC. It is eFuse, it is this
+// board's permanent identity, and nothing in HomeShield writes it. The
+// firmware is not touched either; the board reboots into the same sketch and
+// picks up M37's BLE onboarding because its NVS no longer says otherwise.
+//
+// There is no reply. The Control Server is not waiting for one and, by the
+// time this runs, has already deleted or is deleting the records this board
+// would be replying about.
+void HomeShieldClass::Unprovision()
+{
+    Serial.println(
+        "[HomeShield] Unprovisioning: clearing the HomeShield configuration.");
+
+
+    bool cleared =
+        _storageService.ClearProvisioningConfig();
+
+
+    if (!cleared)
+    {
+        // Reported, and then the restart happens anyway.
+        //
+        // The board cannot stay as it is: the household has deleted it and the
+        // Control Server will refuse everything it sends from here on. A reboot
+        // that comes back still provisioned is at least a board that says so on
+        // its serial port, which is the only thing that tells somebody it needs
+        // erasing by hand. Refusing to reboot would leave it running against a
+        // server that has forgotten it, silently.
+        Serial.println(
+            "[HomeShield] WARNING: the provisioning configuration could NOT be "
+            "verified as cleared. Restarting anyway - if this board comes back "
+            "provisioned, its NVS must be erased manually.");
+    }
+
+
+    // The Wi-Fi driver keeps its own copy of the credentials in its own NVS
+    // namespace, which HomeShield does not own and ClearProvisioningConfig()
+    // does not touch. Erasing it here is what stops the board silently
+    // rejoining the household's network on the next boot while advertising
+    // itself for onboarding. Exactly what CheckResetButton() does.
+    WiFi.disconnect(true, true);
+
+    delay(100);
+
+
+    Serial.println(
+        "[HomeShield] Unprovisioned. Restarting into BLE onboarding.");
+
+    Serial.flush();
+
+    ESP.restart();
 }
 
 

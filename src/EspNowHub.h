@@ -150,6 +150,13 @@ private:
     void HandleConfirm(
         const HsIdentityConfirm& confirm);
 
+
+    // Milestone 40. Answers a provisioned node asking whether this hub still
+    // has it. Read-only: it consults the registry and writes nothing, changes
+    // no state and cannot interrupt a discovery session in progress.
+    void HandleRelationshipCheck(
+        const HsRelationshipCheck& check);
+
     void SendAck(
         bool accepted,
         uint8_t reason);
@@ -255,6 +262,14 @@ private:
     uint8_t _sequence = 0;
 
     bool _nodePeerAdded = false;
+
+
+    // Milestone 40. One reusable peer slot for answering relationship checks
+    // from nodes that are NOT the current discovery target. See
+    // HandleRelationshipCheck for why it outlives the send.
+    uint8_t _replyPeer[6] = {0};
+
+    bool _replyPeerAdded = false;
 
     // What the node said about itself, held from NODE_FOUND until
     // the registry append at the very end.

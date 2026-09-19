@@ -6,6 +6,7 @@
 #include <esp_now.h>
 #include <esp_wifi.h>
 #include <esp_mac.h>
+#include <esp_random.h>
 
 
 EspNowNodeClass EspNowNode;
@@ -109,7 +110,7 @@ void EspNowNodeClass::begin(
 
     if (Load())
     {
-        _state = State::Provisioned;
+        _persisted = true;
 
         Serial.print(
             "[EspNowNode] Provisioned. Hub: ");
@@ -117,9 +118,45 @@ void EspNowNodeClass::begin(
         Serial.println(
             _hubMacText);
 
-        // Deliberately no radio. A provisioned node is silent until milestone
-        // 39 gives it something to say, and a node that kept listening would
-        // answer a discovery it must refuse.
+
+        // --------------------------------------------------
+        // Milestone 40: ask before settling
+        // --------------------------------------------------
+        //
+        // M38 stopped here with the radio down, because a provisioned node had
+        // nothing to say. It has exactly one thing to say now, once, at boot:
+        // is the hub I stored still mine?
+        //
+        // The server never commands a C3. A node may be asleep or unpowered
+        // for days when its hub is deleted, so there is nothing to deliver a
+        // revocation TO - the node has to come and ask. This is that ask, and
+        // it is the whole of it: one short sweep, then silence either way.
+        //
+        // It cannot adopt this node to anybody and it cannot change which hub
+        // it belongs to. The only outcome that writes to NVS is an explicit
+        // REVOKED from the hub whose MAC is already stored here.
+        _state = State::RelationshipCheck;
+
+        _sweepsCompleted = 0;
+
+        do
+        {
+            _sessionId = esp_random();
+        }
+        while (_sessionId == 0);
+
+
+        Serial.println(
+            "[EspNowNode] Verifying the stored hub relationship before "
+            "settling.");
+
+
+        StartRadio();
+
+        // Channel 1 is already set and dwelling; the sweep in loop() sends on
+        // every channel AFTER it steps, so the first one is sent here.
+        SendRelationshipCheck();
+
         return;
     }
 
@@ -308,6 +345,18 @@ void EspNowNodeClass::loop()
 
             HandleAck(ack);
         }
+        else if (HsEspNow::ValidHeader(
+                     frame,
+                     length,
+                     MSG_RELATIONSHIP_STATUS,
+                     sizeof(HsRelationshipStatus)))
+        {
+            HsRelationshipStatus status;
+
+            memcpy(&status, frame, sizeof(status));
+
+            HandleRelationshipStatus(status);
+        }
 
         // Anything else is dropped in silence. A frame from another HomeShield
         // milestone, another protocol or another vendor is not this node's
@@ -374,6 +423,39 @@ void EspNowNodeClass::loop()
             Serial.flush();
 
             ESP.restart();
+
+            break;
+        }
+
+        case State::RelationshipCheck:
+        {
+            // --------------------------------------------------
+            // Milestone 40
+            // --------------------------------------------------
+            //
+            // The hub cannot change channel - it is pinned to the household
+            // router - and this node has no way to know which channel that is,
+            // exactly as during discovery. So it sweeps, and asks once per
+            // channel visit.
+            //
+            // Two full sweeps, then it stops. Giving up is a NORMAL outcome
+            // here, not a failure: the hub may be powered off, out of range or
+            // rebooting, and none of that means this node was revoked.
+            if (_sweepsCompleted >= MaxCheckSweeps)
+            {
+                SettleProvisioned(
+                    "the hub did not answer within two sweeps");
+
+                break;
+            }
+
+
+            if (now - _channelSteppedAt >= ChannelDwell)
+            {
+                StepChannel();
+
+                SendRelationshipCheck();
+            }
 
             break;
         }
@@ -487,6 +569,8 @@ void EspNowNodeClass::ReportStatus()
         case State::Discovery:    Serial.println("DISCOVERY"); break;
         case State::Responding:   Serial.println("RESPONDING"); break;
         case State::Confirmed:    Serial.println("CONFIRMED"); break;
+        case State::RelationshipCheck:
+                                  Serial.println("RELATIONSHIP_CHECK"); break;
         case State::Provisioned:  Serial.println("PROVISIONED"); break;
     }
 }
@@ -559,6 +643,24 @@ void EspNowNodeClass::OnFrameReceived(
 void EspNowNodeClass::HandleRequest(
     const HsDiscoveryRequest& request)
 {
+    // --------------------------------------------------
+    // Milestone 40
+    // --------------------------------------------------
+    //
+    // A provisioned node does not answer discovery. M38 enforced that by
+    // keeping the radio off entirely; the relationship check now has the radio
+    // up for a few seconds at boot, so the rule has to be stated rather than
+    // implied.
+    //
+    // Without this, a hub mid-discovery for this exact MAC could re-adopt a
+    // node that already belongs to another hub, during the very window in
+    // which it is asking whether it still does.
+    if (_persisted)
+    {
+        return;
+    }
+
+
     // --------------------------------------------------
     // The check that makes a room full of nodes safe
     // --------------------------------------------------
@@ -859,6 +961,190 @@ void EspNowNodeClass::SendConfirm(
 }
 
 
+// ==================================================
+// Relationship check (milestone 40)
+// ==================================================
+
+void EspNowNodeClass::SendRelationshipCheck()
+{
+    if (!_radioStarted) return;
+
+
+    // The peer carries a channel, and this node is sweeping. Re-pointed only
+    // when the sweep has actually moved - AddHubPeer() deletes and re-adds,
+    // and doing that on every pass of loop() would churn the peer table for
+    // nothing.
+    if (!_hubPeerAdded || _peerChannel != _channel)
+    {
+        if (!AddHubPeer())
+        {
+            Serial.println(
+                "[EspNowNode] Could not add the stored hub as a peer for the "
+                "relationship check.");
+
+            return;
+        }
+
+        _peerChannel = _channel;
+    }
+
+
+    HsRelationshipCheck check = {};
+
+    check.header.magic = HS_ESPNOW_MAGIC;
+    check.header.protocolVersion = HS_ESPNOW_VERSION;
+    check.header.msgType = MSG_RELATIONSHIP_CHECK;
+    check.header.sequence = _sequence++;
+    check.header.sessionId = _sessionId;
+
+    memcpy(check.nodeMac, _nodeMac, 6);
+    memcpy(check.hubMac, _hubMac, 6);
+
+
+    esp_now_send(
+        _hubMac,
+        (const uint8_t*)&check,
+        sizeof(check));
+}
+
+
+void EspNowNodeClass::HandleRelationshipStatus(
+    const HsRelationshipStatus& status)
+{
+    if (_state != State::RelationshipCheck) return;
+
+
+    // The same three checks the discovery ACK makes, for the same reasons: the
+    // session id rejects an answer to a check this node has already finished,
+    // the hub MAC rejects an answer from a hub this node did not ask, and the
+    // node MAC rejects one meant for a different node.
+    //
+    // The hub MAC check is the load-bearing one here. Without it another hub
+    // in the same house - one this node has never belonged to and whose
+    // registry therefore cannot contain it - could revoke it.
+    if (status.header.sessionId != _sessionId) return;
+
+    if (memcmp(status.hubMac, _hubMac, 6) != 0) return;
+
+    if (memcmp(status.nodeMac, _nodeMac, 6) != 0) return;
+
+
+    if (status.verdict == RELATIONSHIP_REVOKED)
+    {
+        Serial.print(
+            "[EspNowNode] Hub ");
+
+        Serial.print(_hubMacText);
+
+        Serial.println(
+            " no longer has this node. Clearing the stored relationship.");
+
+
+        if (!ClearPersisted())
+        {
+            // Restarting anyway, and saying so. A node that comes back still
+            // pointing at a hub that has disowned it will simply ask again at
+            // the next boot and be told the same thing - it is recoverable,
+            // where a node that refused to restart would sit here forever.
+            Serial.println(
+                "[EspNowNode] WARNING: the stored relationship could NOT be "
+                "verified as cleared. Restarting anyway.");
+        }
+
+        _persisted = false;
+
+        Serial.flush();
+
+        ESP.restart();
+
+        return;
+    }
+
+
+    if (status.verdict == RELATIONSHIP_VALID)
+    {
+        SettleProvisioned(
+            "the hub confirmed this node");
+
+        return;
+    }
+
+
+    // A verdict this build does not know. Treated as no answer at all, which
+    // is the safe reading: only an explicit REVOKED may unprovision a node,
+    // and a value that is not REVOKED is not one.
+    Serial.print(
+        "[EspNowNode] Unknown relationship verdict ");
+
+    Serial.print(status.verdict);
+
+    Serial.println(". Ignoring it and keeping the stored hub.");
+}
+
+
+void EspNowNodeClass::SettleProvisioned(
+    const char* why)
+{
+    if (_hubPeerAdded)
+    {
+        esp_now_del_peer(_hubMac);
+
+        _hubPeerAdded = false;
+    }
+
+
+    _state = State::Provisioned;
+
+    _sessionId = 0;
+
+
+    Serial.print(
+        "[EspNowNode] Settled as provisioned to ");
+
+    Serial.print(_hubMacText);
+
+    Serial.print(" - ");
+
+    Serial.print(why);
+
+    Serial.println(".");
+
+
+    // The radio is left initialised but idle. Bringing it down would gain a
+    // node that is about to do nothing anyway, and M38's rule still holds: a
+    // provisioned node does not answer discovery requests. State::Provisioned
+    // returns from loop() before the inbox is ever drained, so anything that
+    // arrives from here on is discarded unread.
+}
+
+
+bool EspNowNodeClass::ClearPersisted()
+{
+    if (!_preferences.begin(Namespace, false)) return false;
+
+
+    // The commit marker FIRST, exactly as Persist() writes it LAST. A power
+    // cut anywhere after this line leaves an unprovisioned node with a stale
+    // hub MAC, which Load() already refuses; the other order would leave one
+    // that believes it is adopted by an address it can no longer read.
+    _preferences.remove(StateKey);
+    _preferences.remove(HubMacKey);
+    _preferences.remove(VersionKey);
+
+
+    bool cleared =
+        !_preferences.isKey(StateKey) &&
+        !_preferences.isKey(HubMacKey) &&
+        !_preferences.isKey(VersionKey);
+
+
+    _preferences.end();
+
+
+    return cleared;
+}
+
+
 bool EspNowNodeClass::AddHubPeer()
 {
     if (_hubPeerAdded)
@@ -1001,7 +1287,14 @@ bool EspNowNodeClass::Load()
 
 bool EspNowNodeClass::IsProvisioned() const
 {
-    return _state == State::Provisioned;
+    // Milestone 40. The stored relationship, not the loop's state.
+    //
+    // It used to be State::Provisioned, which was the same thing when a node
+    // booted straight into it. A node is now in RelationshipCheck for a few
+    // seconds first, and it IS adopted throughout - the check can only take
+    // that away, never grant it - so answering "no" during those seconds would
+    // tell a sketch something untrue.
+    return _persisted;
 }
 
 
