@@ -1468,6 +1468,29 @@ void EspNowHubClass::PollRegistration()
     }
 
 
+    // Anything that is not an explicit Succeeded is NOT a success.
+    //
+    // This used to fall through: the two checks above return on InProgress and
+    // on Failed, and everything else was taken to mean the registration had
+    // landed. The enum has a third value - Idle, which is what
+    // reRegistrationState() answers when there is no registration service at
+    // all - and reading it as success would report Completed for a child the
+    // Control Server was never asked to create, leaving the household with a
+    // sensor that exists only on this hub.
+    if (result != HomeShieldClass::ReRegistration::Succeeded)
+    {
+        Serial.println(
+            "[EspNowHub] Registration ended in an unexpected state. The node has "
+            "NOT been saved.");
+
+        EndSession(
+            PHASE_REGISTRATION_FAILED,
+            "REGISTRATION_UNREACHABLE");
+
+        return;
+    }
+
+
     // Succeeded. Only now does the node become permanent.
     if (!AppendToRegistry(_pending))
     {
