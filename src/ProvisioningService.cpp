@@ -140,7 +140,7 @@ void ProvisioningService::Begin()
 
     // A board that carries only the pre-M37 Wi-Fi keys lands here too: it has
     // no Control Server URL and no commit marker, so it is onboarded over BLE.
-    Serial.println(
+    DEBUG_LOG(
         "[HomeShield] Not provisioned. Advertising for BLE onboarding as HS-" +
         DeviceIdentity::GetHardwareId());
 
@@ -598,8 +598,7 @@ void ProvisioningService::Succeed()
 void ProvisioningService::Fail(
     const char* code)
 {
-    Serial.print("[HomeShield] Provisioning failed: ");
-    Serial.println(code);
+    DEBUG_VALUE("[HomeShield] Provisioning failed", code);
 
     // Nothing was persisted. Stop registering and leave the network.
     _registrationService.SetControlServerUrl("");

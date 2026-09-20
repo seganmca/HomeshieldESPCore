@@ -175,6 +175,27 @@ public:
         bool activeLow = true);
 
 
+    // --------------------------------------------------
+    // Heartbeat interval (milestone 41)
+    // --------------------------------------------------
+    //
+    // Default 30 000 ms, and the default is the fix.
+    //
+    // It was a hard 60 s while the Control Server's
+    // HomeShieldConstants.DeviceOfflineThresholdSeconds is also 60 - so
+    // every HomeShield board in the field was one late packet away from
+    // being declared offline and immediately online again. The server's
+    // constant has always assumed a 30 s heartbeat (its own
+    // DeviceHeartbeatIntervalSeconds says so); the firmware simply never
+    // agreed. Thirty restores the 2x margin the server is written for.
+    //
+    // Settable so a board with a different power budget can say so. May be
+    // called before or after begin()/beginModule(); it takes effect on the
+    // next heartbeat either way. Zero or less is ignored.
+    void setHeartbeatInterval(
+        unsigned long milliseconds);
+
+
     void setCommandHandler(
         CommandHandler handler);
 
@@ -438,8 +459,13 @@ private:
     unsigned long _lastHeartbeat = 0;
 
 
-    static constexpr unsigned long HEARTBEAT_INTERVAL =
-        60 * 1000;
+    // Milestone 41. A member rather than a constant; see
+    // setHeartbeatInterval() for why the default moved to 30 s.
+    static constexpr unsigned long DEFAULT_HEARTBEAT_INTERVAL =
+        30 * 1000;
+
+    unsigned long _heartbeatInterval =
+        DEFAULT_HEARTBEAT_INTERVAL;
 
 
     // The topic devices report state changes and heartbeats on.

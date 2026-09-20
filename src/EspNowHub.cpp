@@ -117,7 +117,7 @@ int EspNowHubClass::declarePersistedNodes()
 
     if (!LoadRegistry())
     {
-        Serial.println(
+        DEBUG_LOG(
             "[EspNowHub] No node registry. This hub has adopted nothing yet.");
 
         return 0;
@@ -140,16 +140,37 @@ int EspNowHubClass::declarePersistedNodes()
             _nodes[i].defaultName);
 
 
-        Serial.print(
+        DEBUG_LOG_PRINT(
             "[EspNowHub] Declared adopted node ");
 
-        Serial.print(_nodes[i].mac);
+        DEBUG_LOG_PRINT(_nodes[i].mac);
 
-        Serial.print(" as '");
+        DEBUG_LOG_PRINT(" as '");
 
-        Serial.print(composed);
+        DEBUG_LOG_PRINT(composed);
 
-        Serial.println("'");
+        DEBUG_LOG("'");
+
+
+        // --------------------------------------------------
+        // A fresh window per node, starting now
+        // --------------------------------------------------
+        //
+        // Not "never heard from". This hub has just booted and genuinely does
+        // not know when any of these last reported, and the two wrong answers
+        // are both worse than this one: starting at zero would declare every
+        // adopted node offline within a second of a power cut, and marking
+        // them "never heard" would mean a node that died while the hub was
+        // down is never reported at all.
+        //
+        // Giving each node one full interval plus the grace period to check
+        // in is the honest reading of what the hub knows. A live node reports
+        // inside it; a dead one does not, and is reported once.
+        _liveness[i].lastHeardAt = millis();
+
+        _liveness[i].reportedOffline = false;
+
+        _liveness[i].hasPending = false;
 
 
         declared++;
@@ -169,11 +190,7 @@ void EspNowHubClass::begin()
     esp_read_mac(_hubMac, ESP_MAC_BASE);
 
 
-    Serial.print(
-        "[EspNowHub] Hub MAC: ");
-
-    Serial.println(
-        HsEspNow::FormatMac(_hubMac));
+    DEBUG_VALUE("[EspNowHub] Hub MAC", HsEspNow::FormatMac(_hubMac));
 
 
     // The radio is not brought up here. An unprovisioned board is advertising
@@ -195,16 +212,16 @@ void EspNowHubClass::StartRadio()
     if (initResult != ESP_OK &&
         initResult != ESP_ERR_ESPNOW_EXIST)
     {
-        Serial.print(
+        DEBUG_LOG_PRINT(
             "[EspNowHub] esp_now_init() FAILED: ");
 
-        Serial.print(esp_err_to_name(initResult));
+        DEBUG_LOG_PRINT(esp_err_to_name(initResult));
 
-        Serial.print(" (Wi-Fi status ");
+        DEBUG_LOG_PRINT(" (Wi-Fi status ");
 
-        Serial.print(WiFi.status());
+        DEBUG_LOG_PRINT(WiFi.status());
 
-        Serial.println("). Retrying.");
+        DEBUG_LOG("). Retrying.");
 
         return;
     }
@@ -259,10 +276,7 @@ void EspNowHubClass::StartRadio()
     if (peerResult != ESP_OK &&
         peerResult != ESP_ERR_ESPNOW_EXIST)
     {
-        Serial.print(
-            "[EspNowHub] Could not add the broadcast peer: ");
-
-        Serial.println(esp_err_to_name(peerResult));
+        DEBUG_VALUE("[EspNowHub] Could not add the broadcast peer", esp_err_to_name(peerResult));
 
         return;
     }
@@ -278,34 +292,34 @@ void EspNowHubClass::StartRadio()
     esp_wifi_get_channel(&primary, &second);
 
 
-    Serial.print(
+    DEBUG_LOG_PRINT(
         "[EspNowHub] ESP-NOW ready. init=");
 
-    Serial.print(esp_err_to_name(initResult));
+    DEBUG_LOG_PRINT(esp_err_to_name(initResult));
 
-    Serial.print(" recv_cb=");
+    DEBUG_LOG_PRINT(" recv_cb=");
 
-    Serial.print(esp_err_to_name(cbResult));
+    DEBUG_LOG_PRINT(esp_err_to_name(cbResult));
 
-    Serial.print(" send_cb=");
+    DEBUG_LOG_PRINT(" send_cb=");
 
-    Serial.print(esp_err_to_name(sendCbResult));
+    DEBUG_LOG_PRINT(esp_err_to_name(sendCbResult));
 
-    Serial.print(" powerSave=");
+    DEBUG_LOG_PRINT(" powerSave=");
 
-    Serial.print(esp_err_to_name(ps));
+    DEBUG_LOG_PRINT(esp_err_to_name(ps));
 
-    Serial.print(" wifiChannel=");
+    DEBUG_LOG_PRINT(" wifiChannel=");
 
-    Serial.print(WiFi.channel());
+    DEBUG_LOG_PRINT(WiFi.channel());
 
-    Serial.print(" radioChannel=");
+    DEBUG_LOG_PRINT(" radioChannel=");
 
-    Serial.print(primary);
+    DEBUG_LOG_PRINT(primary);
 
-    Serial.print(" hubMac=");
+    DEBUG_LOG_PRINT(" hubMac=");
 
-    Serial.println(HsEspNow::FormatMac(_hubMac));
+    DEBUG_LOG(HsEspNow::FormatMac(_hubMac));
 
 
     // If these three ever disagree, the node has been aiming at an address
@@ -315,21 +329,21 @@ void EspNowHubClass::StartRadio()
 
     esp_read_mac(baseMac, ESP_MAC_BASE);
 
-    Serial.print(
+    DEBUG_LOG_PRINT(
         "[EspNowHub]   MAC check: espnow/sta=");
 
-    Serial.print(HsEspNow::FormatMac(_hubMac));
+    DEBUG_LOG_PRINT(HsEspNow::FormatMac(_hubMac));
 
-    Serial.print(" base=");
+    DEBUG_LOG_PRINT(" base=");
 
-    Serial.print(HsEspNow::FormatMac(baseMac));
+    DEBUG_LOG_PRINT(HsEspNow::FormatMac(baseMac));
 
-    Serial.print(" WiFi.macAddress()=");
+    DEBUG_LOG_PRINT(" WiFi.macAddress()=");
 
-    Serial.println(WiFi.macAddress());
+    DEBUG_LOG(WiFi.macAddress());
 
 
-    Serial.println(
+    DEBUG_LOG(
         "[EspNowHub] A node must sweep onto this channel to hear us. If the "
         "node never reports framesHeard > 0, it is not reaching this channel.");
 }
@@ -349,7 +363,7 @@ void EspNowHubClass::loop()
     {
         _loopConfirmed = true;
 
-        Serial.println(
+        DEBUG_LOG(
             "[EspNowHub] loop() is running and the radio is up. Ready for "
             "DISCOVER_NODE.");
     }
@@ -430,6 +444,18 @@ void EspNowHubClass::loop()
 
             HandleRelationshipCheck(check);
         }
+        else if (HsEspNow::ValidHeader(
+                     frame,
+                     length,
+                     MSG_NODE_REPORT,
+                     sizeof(HsNodeReport)))
+        {
+            HsNodeReport report;
+
+            memcpy(&report, frame, sizeof(report));
+
+            HandleNodeReport(report);
+        }
         else
         {
             // Heard, but not ours, or not the shape we expect. Worth saying
@@ -440,19 +466,40 @@ void EspNowHubClass::loop()
             {
                 _reportedForeignFrame = true;
 
-                Serial.print(
+                DEBUG_LOG_PRINT(
                     "[EspNowHub] <- a frame was heard but rejected by the "
                     "validator (length=");
 
-                Serial.print(length);
+                DEBUG_LOG_PRINT(length);
 
-                Serial.println("). It is not a HomeShield discovery frame.");
+                DEBUG_LOG("). It is not a HomeShield discovery frame.");
             }
         }
     }
 
 
     unsigned long now = millis();
+
+
+    // --------------------------------------------------
+    // Milestone 41 - outside the state machine, deliberately
+    // --------------------------------------------------
+    //
+    // Both of these run in EVERY state, including mid-discovery. An adopted
+    // sensor does not stop existing because somebody is onboarding another
+    // one, and a node that reports during a discovery session must still be
+    // ACKed, published and counted as alive.
+    //
+    // This is the same argument the sketch's own comment makes about Wi-Fi and
+    // MQTT: discovery is not a mode the hub disappears into.
+    PublishPendingStates();
+
+    if (now - _lastLivenessReviewAt >= LivenessReviewInterval)
+    {
+        _lastLivenessReviewAt = now;
+
+        ReviewNodeLiveness();
+    }
 
 
     switch (_state)
@@ -495,7 +542,7 @@ void EspNowHubClass::loop()
 
             if (_ackAttempts >= MaxAckAttempts)
             {
-                Serial.println(
+                DEBUG_LOG(
                     "[EspNowHub] The node never confirmed. Abandoning the "
                     "session; nothing has been saved.");
 
@@ -549,10 +596,7 @@ bool EspNowHubClass::handleModuleCommand(
             command.substring(
                 strlen("DISCOVER_NODE:"));
 
-        Serial.print(
-            "[EspNowHub] -> discovery requested: ");
-
-        Serial.println(target);
+        DEBUG_VALUE("[EspNowHub] -> discovery requested", target);
 
         StartDiscovery(target);
 
@@ -562,7 +606,7 @@ bool EspNowHubClass::handleModuleCommand(
 
     if (command == "CANCEL_NODE_DISCOVERY")
     {
-        Serial.println(
+        DEBUG_LOG(
             "[EspNowHub] -> cancel requested");
 
         CancelDiscovery();
@@ -571,10 +615,7 @@ bool EspNowHubClass::handleModuleCommand(
     }
 
 
-    Serial.print(
-        "[EspNowHub] Ignored an unrecognised module command: ");
-
-    Serial.println(command);
+    DEBUG_VALUE("[EspNowHub] Ignored an unrecognised module command", command);
 
     return false;
 }
@@ -594,12 +635,12 @@ void EspNowHubClass::StartDiscovery(
 
     if (!HsEspNow::ParseMac(target, target_mac))
     {
-        Serial.print(
+        DEBUG_LOG_PRINT(
             "[EspNowHub] Refused a discovery: '");
 
-        Serial.print(target);
+        DEBUG_LOG_PRINT(target);
 
-        Serial.println(
+        DEBUG_LOG(
             "' is not twelve hexadecimal characters.");
 
         _targetMacText = target;
@@ -619,12 +660,12 @@ void EspNowHubClass::StartDiscovery(
     // the registry is the authority on which nodes this hub already holds.
     if (IsAdopted(target))
     {
-        Serial.print(
+        DEBUG_LOG_PRINT(
             "[EspNowHub] Refused a discovery: ");
 
-        Serial.print(target);
+        DEBUG_LOG_PRINT(target);
 
-        Serial.println(
+        DEBUG_LOG(
             " has already been added to this hub.");
 
         _targetMacText = target;
@@ -641,10 +682,10 @@ void EspNowHubClass::StartDiscovery(
 
     if (_state != State::Normal)
     {
-        Serial.print(
+        DEBUG_LOG_PRINT(
             "[EspNowHub] Refused a discovery: one is already running for ");
 
-        Serial.println(_targetMacText);
+        DEBUG_LOG(_targetMacText);
 
         String previous = _targetMacText;
 
@@ -665,16 +706,16 @@ void EspNowHubClass::StartDiscovery(
         // This was the silent one. ESP-NOW not being up produced no serial
         // output at all, so a hub that had received DISCOVER_NODE and could do
         // nothing with it looked identical to a hub that had never received it.
-        Serial.print(
+        DEBUG_LOG_PRINT(
             "[EspNowHub] Refused a discovery for ");
 
-        Serial.print(target);
+        DEBUG_LOG_PRINT(target);
 
-        Serial.print(": ESP-NOW is not running (Wi-Fi status ");
+        DEBUG_LOG_PRINT(": ESP-NOW is not running (Wi-Fi status ");
 
-        Serial.print(WiFi.status());
+        DEBUG_LOG_PRINT(WiFi.status());
 
-        Serial.println("). Nothing can be transmitted.");
+        DEBUG_LOG("). Nothing can be transmitted.");
 
         _targetMacText = target;
 
@@ -690,13 +731,13 @@ void EspNowHubClass::StartDiscovery(
 
     if (_nodeCount >= MAX_NODES)
     {
-        Serial.print(
+        DEBUG_LOG_PRINT(
             "[EspNowHub] Refused a discovery: this hub already holds the "
             "maximum of ");
 
-        Serial.print(MAX_NODES);
+        DEBUG_LOG_PRINT(MAX_NODES);
 
-        Serial.println(" nodes.");
+        DEBUG_LOG(" nodes.");
 
         _targetMacText = target;
 
@@ -788,65 +829,65 @@ void EspNowHubClass::StartDiscovery(
     esp_wifi_get_channel(&primary, &second);
 
 
-    Serial.println();
+    DEBUG_LOG("");
 
-    Serial.println(
+    DEBUG_LOG(
         "==================================================");
 
-    Serial.print(
+    DEBUG_LOG_PRINT(
         "[EspNowHub] DISCOVERY STARTED for ");
 
-    Serial.println(_targetMacText);
+    DEBUG_LOG(_targetMacText);
 
-    Serial.print(
+    DEBUG_LOG_PRINT(
         "[EspNowHub] -> session created : ");
 
-    Serial.println(_sessionId);
+    DEBUG_LOG(_sessionId);
 
-    Serial.print(
+    DEBUG_LOG_PRINT(
         "[EspNowHub] -> state = DISCOVERING, channel ");
 
-    Serial.println(primary);
+    DEBUG_LOG(primary);
 
-    Serial.print(
+    DEBUG_LOG_PRINT(
         "[EspNowHub]   hub MAC   : ");
 
-    Serial.println(HsEspNow::FormatMac(_hubMac));
+    DEBUG_LOG(HsEspNow::FormatMac(_hubMac));
 
-    Serial.print(
+    DEBUG_LOG_PRINT(
         "[EspNowHub]   node peer : ");
 
-    Serial.println(
+    DEBUG_LOG(
         nodePeerAdded
             ? "added (the hub can hear and address this node)"
             : "NOT ADDED - the node's replies may not be accepted");
 
-    Serial.print(
+    DEBUG_LOG_PRINT(
         "[EspNowHub]   powerSave : ");
 
-    Serial.print(esp_err_to_name(psResult));
+    DEBUG_LOG_PRINT(esp_err_to_name(psResult));
 
-    Serial.println(" (WIFI_PS_NONE re-asserted for this session)");
+    DEBUG_LOG(" (WIFI_PS_NONE re-asserted for this session)");
 
-    Serial.print(
+    DEBUG_LOG_PRINT(
         "[EspNowHub]   channel   : ");
 
-    Serial.print(primary);
+    DEBUG_LOG_PRINT(primary);
 
-    Serial.print(" (WiFi.channel()=");
+    DEBUG_LOG_PRINT(" (WiFi.channel()=");
 
-    Serial.print(WiFi.channel());
+    DEBUG_LOG_PRINT(WiFi.channel());
 
-    Serial.println(")");
+    DEBUG_LOG(")");
 
-    Serial.print(
+    DEBUG_LOG_PRINT(
         "[EspNowHub]   broadcast : every ");
 
-    Serial.print(BroadcastInterval);
+    DEBUG_LOG_PRINT(BroadcastInterval);
 
-    Serial.println(" ms, no timeout");
+    DEBUG_LOG(" ms, no timeout");
 
-    Serial.println(
+    DEBUG_LOG(
         "==================================================");
 
 
@@ -878,7 +919,7 @@ void EspNowHubClass::CancelDiscovery()
         // Ignored, and honestly so. The Control Server has been asked to create
         // a child and that request cannot be recalled; the outcome will be
         // reported as Completed or RegistrationFailed shortly.
-        Serial.println(
+        DEBUG_LOG(
             "[EspNowHub] Cancel arrived during registration and is ignored. "
             "The registration will be reported when it settles.");
 
@@ -886,7 +927,7 @@ void EspNowHubClass::CancelDiscovery()
     }
 
 
-    Serial.println(
+    DEBUG_LOG(
         "[EspNowHub] Discovery cancelled. Nothing was saved.");
 
 
@@ -933,27 +974,27 @@ void EspNowHubClass::Broadcast()
     // up - was previously invisible, because nothing checked this return value.
     if (_broadcastsSent <= 3 || result != ESP_OK)
     {
-        Serial.print(
+        DEBUG_LOG_PRINT(
             "[EspNowHub] -> DISCOVERY_REQUEST #");
 
-        Serial.print(_broadcastsSent);
+        DEBUG_LOG_PRINT(_broadcastsSent);
 
-        Serial.print(" generated target=");
+        DEBUG_LOG_PRINT(" generated target=");
 
-        Serial.print(HsEspNow::FormatMac(request.targetMac));
+        DEBUG_LOG_PRINT(HsEspNow::FormatMac(request.targetMac));
 
-        Serial.print(" session=");
+        DEBUG_LOG_PRINT(" session=");
 
-        Serial.print(request.header.sessionId);
+        DEBUG_LOG_PRINT(request.header.sessionId);
 
-        Serial.print(" ch=");
+        DEBUG_LOG_PRINT(" ch=");
 
-        Serial.println(WiFi.channel());
+        DEBUG_LOG(WiFi.channel());
 
-        Serial.print(
+        DEBUG_LOG_PRINT(
             "[EspNowHub] -> esp_now_send() = ");
 
-        Serial.println(esp_err_to_name(result));
+        DEBUG_LOG(esp_err_to_name(result));
     }
 }
 
@@ -980,29 +1021,29 @@ void EspNowHubClass::ReportStatus()
     esp_wifi_get_channel(&primary, &second);
 
 
-    Serial.print("[EspNowHub] discovering ");
+    DEBUG_LOG_PRINT("[EspNowHub] discovering ");
 
-    Serial.print(_targetMacText);
+    DEBUG_LOG_PRINT(_targetMacText);
 
-    Serial.print(" session=");
+    DEBUG_LOG_PRINT(" session=");
 
-    Serial.print(_sessionId);
+    DEBUG_LOG_PRINT(_sessionId);
 
-    Serial.print(" ch=");
+    DEBUG_LOG_PRINT(" ch=");
 
-    Serial.print(primary);
+    DEBUG_LOG_PRINT(primary);
 
-    Serial.print(" sent=");
+    DEBUG_LOG_PRINT(" sent=");
 
-    Serial.print(_broadcastsSent);
+    DEBUG_LOG_PRINT(_broadcastsSent);
 
-    Serial.print(" failed=");
+    DEBUG_LOG_PRINT(" failed=");
 
-    Serial.print(_broadcastsFailed);
+    DEBUG_LOG_PRINT(_broadcastsFailed);
 
-    Serial.print(" framesHeard=");
+    DEBUG_LOG_PRINT(" framesHeard=");
 
-    Serial.println(_framesHeard);
+    DEBUG_LOG(_framesHeard);
 }
 
 
@@ -1020,12 +1061,12 @@ void EspNowHubClass::OnFrameSent(
     // reports.
     if (_sendsCompleted <= 3 || !ok)
     {
-        Serial.print(
+        DEBUG_LOG_PRINT(
             "[EspNowHub] -> send callback #");
 
-        Serial.print(_sendsCompleted);
+        DEBUG_LOG_PRINT(_sendsCompleted);
 
-        Serial.println(ok ? " = SUCCESS" : " = FAIL");
+        DEBUG_LOG(ok ? " = SUCCESS" : " = FAIL");
     }
 }
 
@@ -1047,18 +1088,18 @@ void EspNowHubClass::OnFrameReceived(
     // send callback, which already prints.
     if (_framesHeard <= 5)
     {
-        Serial.print(
+        DEBUG_LOG_PRINT(
             "[EspNowHub] <- frame #");
 
-        Serial.print(_framesHeard);
+        DEBUG_LOG_PRINT(_framesHeard);
 
-        Serial.print(" from ");
+        DEBUG_LOG_PRINT(" from ");
 
-        Serial.print(HsEspNow::FormatMac(mac));
+        DEBUG_LOG_PRINT(HsEspNow::FormatMac(mac));
 
-        Serial.print(" length=");
+        DEBUG_LOG_PRINT(" length=");
 
-        Serial.print(length);
+        DEBUG_LOG_PRINT(length);
 
         if (length >= (int)sizeof(HsEspNowHeader))
         {
@@ -1066,24 +1107,24 @@ void EspNowHubClass::OnFrameReceived(
 
             memcpy(&header, data, sizeof(header));
 
-            Serial.print(" magic=0x");
+            DEBUG_LOG_PRINT(" magic=0x");
 
-            Serial.print(header.magic, HEX);
+            DEBUG_LOG_PRINT(String(header.magic, HEX));
 
-            Serial.print(" version=");
+            DEBUG_LOG_PRINT(" version=");
 
-            Serial.print(header.protocolVersion);
+            DEBUG_LOG_PRINT(header.protocolVersion);
 
-            Serial.print(" type=");
+            DEBUG_LOG_PRINT(" type=");
 
-            Serial.print(header.msgType);
+            DEBUG_LOG_PRINT(header.msgType);
 
-            Serial.print(" session=");
+            DEBUG_LOG_PRINT(" session=");
 
-            Serial.print(header.sessionId);
+            DEBUG_LOG_PRINT(header.sessionId);
         }
 
-        Serial.println();
+        DEBUG_LOG("");
     }
 
     if (length <= 0 || (size_t)length > MaxFrame) return;
@@ -1127,15 +1168,15 @@ void EspNowHubClass::HandleResponse(
     {
         if (_droppedWrongSession++ == 0)
         {
-            Serial.print(
+            DEBUG_LOG_PRINT(
                 "[EspNowHub] Dropped a DISCOVERY_RESPONSE from a stale session: "
                 "frame=");
 
-            Serial.print(response.header.sessionId);
+            DEBUG_LOG_PRINT(response.header.sessionId);
 
-            Serial.print(" live=");
+            DEBUG_LOG_PRINT(" live=");
 
-            Serial.println(_sessionId);
+            DEBUG_LOG(_sessionId);
         }
 
         return;
@@ -1145,16 +1186,16 @@ void EspNowHubClass::HandleResponse(
     {
         if (_droppedWrongNode++ == 0)
         {
-            Serial.print(
+            DEBUG_LOG_PRINT(
                 "[EspNowHub] Dropped a DISCOVERY_RESPONSE from ");
 
-            Serial.print(HsEspNow::FormatMac(response.nodeMac));
+            DEBUG_LOG_PRINT(HsEspNow::FormatMac(response.nodeMac));
 
-            Serial.print(", which is not the node being looked for (");
+            DEBUG_LOG_PRINT(", which is not the node being looked for (");
 
-            Serial.print(_targetMacText);
+            DEBUG_LOG_PRINT(_targetMacText);
 
-            Serial.println(").");
+            DEBUG_LOG(").");
         }
 
         return;
@@ -1164,16 +1205,16 @@ void EspNowHubClass::HandleResponse(
     {
         if (_droppedWrongHub++ == 0)
         {
-            Serial.print(
+            DEBUG_LOG_PRINT(
                 "[EspNowHub] Dropped a DISCOVERY_RESPONSE addressed to hub ");
 
-            Serial.print(HsEspNow::FormatMac(response.hubMac));
+            DEBUG_LOG_PRINT(HsEspNow::FormatMac(response.hubMac));
 
-            Serial.print(", not to this one (");
+            DEBUG_LOG_PRINT(", not to this one (");
 
-            Serial.print(HsEspNow::FormatMac(_hubMac));
+            DEBUG_LOG_PRINT(HsEspNow::FormatMac(_hubMac));
 
-            Serial.println(").");
+            DEBUG_LOG(").");
         }
 
         return;
@@ -1213,7 +1254,7 @@ void EspNowHubClass::HandleResponse(
 
     if (!decoded)
     {
-        Serial.println(
+        DEBUG_LOG(
             "[EspNowHub] The node's metadata could not be read. Refusing it.");
 
         SendAck(false, REASON_MALFORMED);
@@ -1254,22 +1295,22 @@ void EspNowHubClass::HandleResponse(
     _lastAckAt = 0;
 
 
-    Serial.print(
+    DEBUG_LOG_PRINT(
         "[EspNowHub] Node found: ");
 
-    Serial.print(_pending.mac);
+    DEBUG_LOG_PRINT(_pending.mac);
 
-    Serial.print(" type=");
+    DEBUG_LOG_PRINT(" type=");
 
-    Serial.print(_pending.deviceType);
+    DEBUG_LOG_PRINT(_pending.deviceType);
 
-    Serial.print(" key=");
+    DEBUG_LOG_PRINT(" key=");
 
-    Serial.print(_pending.deviceKey);
+    DEBUG_LOG_PRINT(_pending.deviceKey);
 
-    Serial.print(" name=");
+    DEBUG_LOG_PRINT(" name=");
 
-    Serial.println(_pending.defaultName);
+    DEBUG_LOG(_pending.defaultName);
 
 
     Report(
@@ -1298,7 +1339,7 @@ void EspNowHubClass::HandleConfirm(
         // The node could not write our MAC, so it is NOT adopted and must not
         // become a child Device. It reports this rather than going quiet
         // precisely so the household is told instead of left watching a radar.
-        Serial.println(
+        DEBUG_LOG(
             "[EspNowHub] The node could not persist this hub's address. "
             "Abandoning.");
 
@@ -1313,7 +1354,7 @@ void EspNowHubClass::HandleConfirm(
     _state = State::IdentityConfirmed;
 
 
-    Serial.println(
+    DEBUG_LOG(
         "[EspNowHub] Identity confirmed by the node.");
 
 
@@ -1380,66 +1421,18 @@ void EspNowHubClass::HandleRelationshipCheck(
         adopted ? RELATIONSHIP_VALID : RELATIONSHIP_REVOKED;
 
 
-    // --------------------------------------------------
-    // The reply peer
-    // --------------------------------------------------
-    //
-    // Unicast needs a peer entry. If one already exists - because a discovery
-    // session is talking to this very node - it belongs to that session and is
-    // left completely alone.
-    //
-    // Otherwise ONE reusable slot is kept, and the previous occupant is
-    // evicted when the next node asks. It is deliberately not deleted straight
-    // after the send: esp_now_send() only QUEUES the frame, and removing the
-    // peer underneath it is how a reply gets dropped between "sent" and
-    // actually transmitted. Evicting on the NEXT check gives the current one
-    // all the time it needs, and one stale entry costs nothing against
-    // ESP-NOW's peer table.
-    if (!esp_now_is_peer_exist(check.nodeMac))
+    // The shared reply-peer slot. See EnsureReplyPeer().
+    if (!EnsureReplyPeer(check.nodeMac))
     {
-        if (_replyPeerAdded &&
-            memcmp(_replyPeer, check.nodeMac, 6) != 0)
-        {
-            esp_now_del_peer(_replyPeer);
+        DEBUG_LOG_PRINT(
+            "[EspNowHub] Could not add ");
 
-            _replyPeerAdded = false;
-        }
+        DEBUG_LOG_PRINT(nodeMacText);
 
+        DEBUG_LOG(
+            " as a peer to answer its relationship check.");
 
-        esp_now_peer_info_t peer = {};
-
-        memcpy(peer.peer_addr, check.nodeMac, 6);
-
-        // The interface's channel. The node is sweeping and sent this from the
-        // channel this hub is pinned to, which is the one it is listening on
-        // right now.
-        peer.channel = 0;
-
-        peer.encrypt = false;
-
-        peer.ifidx = WIFI_IF_STA;
-
-        esp_err_t addResult = esp_now_add_peer(&peer);
-
-        if (addResult != ESP_OK &&
-            addResult != ESP_ERR_ESPNOW_EXIST)
-        {
-            Serial.print(
-                "[EspNowHub] Could not add ");
-
-            Serial.print(nodeMacText);
-
-            Serial.print(" as a peer to answer its relationship check: ");
-
-            Serial.println(esp_err_to_name(addResult));
-
-            return;
-        }
-
-
-        memcpy(_replyPeer, check.nodeMac, 6);
-
-        _replyPeerAdded = true;
+        return;
     }
 
 
@@ -1450,22 +1443,87 @@ void EspNowHubClass::HandleRelationshipCheck(
             sizeof(status));
 
 
-    Serial.print(
+    DEBUG_LOG_PRINT(
         "[EspNowHub] Relationship check from ");
 
-    Serial.print(nodeMacText);
+    DEBUG_LOG_PRINT(nodeMacText);
 
-    Serial.print(" -> ");
+    DEBUG_LOG_PRINT(" -> ");
 
-    Serial.print(adopted ? "VALID" : "REVOKED");
+    DEBUG_LOG_PRINT(adopted ? "VALID" : "REVOKED");
 
-    Serial.print(" (registry holds ");
+    DEBUG_LOG_PRINT(" (registry holds ");
 
-    Serial.print(_nodeCount);
+    DEBUG_LOG_PRINT(_nodeCount);
 
-    Serial.print(" node(s)) send=");
+    DEBUG_LOG_PRINT(" node(s)) send=");
 
-    Serial.println(esp_err_to_name(sendResult));
+    DEBUG_LOG(esp_err_to_name(sendResult));
+}
+
+
+// --------------------------------------------------
+// The reply peer
+// --------------------------------------------------
+//
+// Unicast needs a peer entry. If one already exists - because a discovery
+// session is talking to this very node - it belongs to that session and is
+// left completely alone.
+//
+// Otherwise ONE reusable slot is kept, and the previous occupant is evicted
+// when the next node asks. It is deliberately not deleted straight after the
+// send: esp_now_send() only QUEUES the frame, and removing the peer underneath
+// it is how a reply gets dropped between "sent" and actually transmitted.
+// Evicting on the NEXT caller gives the current one all the time it needs, and
+// one stale entry costs nothing against ESP-NOW's peer table.
+//
+// Milestone 41 extracted this from HandleRelationshipCheck unchanged, because
+// acknowledging a node's report needs exactly the same slot under exactly the
+// same rules - and two copies of this reasoning would drift.
+bool EspNowHubClass::EnsureReplyPeer(
+    const uint8_t* mac)
+{
+    if (esp_now_is_peer_exist(mac)) return true;
+
+
+    if (_replyPeerAdded &&
+        memcmp(_replyPeer, mac, 6) != 0)
+    {
+        esp_now_del_peer(_replyPeer);
+
+        _replyPeerAdded = false;
+    }
+
+
+    esp_now_peer_info_t peer = {};
+
+    memcpy(peer.peer_addr, mac, 6);
+
+    // The interface's channel. The node transmitted from the channel this hub
+    // is pinned to, which is the one it is listening on right now.
+    peer.channel = 0;
+
+    peer.encrypt = false;
+
+    peer.ifidx = WIFI_IF_STA;
+
+
+    esp_err_t addResult = esp_now_add_peer(&peer);
+
+    if (addResult != ESP_OK &&
+        addResult != ESP_ERR_ESPNOW_EXIST)
+    {
+        DEBUG_VALUE("[EspNowHub] esp_now_add_peer() for a reply failed", esp_err_to_name(addResult));
+
+        return false;
+    }
+
+
+    memcpy(_replyPeer, mac, 6);
+
+    _replyPeerAdded = true;
+
+    return true;
 }
 
 
@@ -1525,10 +1583,7 @@ bool EspNowHubClass::AddNodePeer()
     if (addResult != ESP_OK &&
         addResult != ESP_ERR_ESPNOW_EXIST)
     {
-        Serial.print(
-            "[EspNowHub] Could not add the node as a peer: ");
-
-        Serial.println(esp_err_to_name(addResult));
+        DEBUG_VALUE("[EspNowHub] Could not add the node as a peer", esp_err_to_name(addResult));
 
         return false;
     }
@@ -1556,12 +1611,12 @@ void EspNowHubClass::DropNodePeer()
 
 void EspNowHubClass::BeginRegistration()
 {
-    Serial.print(
+    DEBUG_LOG_PRINT(
         "[EspNowHub] Registering '");
 
-    Serial.print(_pendingComposedKey);
+    DEBUG_LOG_PRINT(_pendingComposedKey);
 
-    Serial.println("' with the Control Server.");
+    DEBUG_LOG("' with the Control Server.");
 
 
     _state = State::Registering;
@@ -1606,7 +1661,7 @@ void EspNowHubClass::PollRegistration()
         // registration first, registry second, so a refused declaration leaves
         // the hub exactly as it was and the retry on the phone re-runs
         // registration alone.
-        Serial.println(
+        DEBUG_LOG(
             "[EspNowHub] Registration failed. The node has NOT been saved.");
 
         // A 4xx is the Control Server refusing the DECLARATION - an unknown
@@ -1637,7 +1692,7 @@ void EspNowHubClass::PollRegistration()
     // sensor that exists only on this hub.
     if (result != HomeShieldClass::ReRegistration::Succeeded)
     {
-        Serial.println(
+        DEBUG_LOG(
             "[EspNowHub] Registration ended in an unexpected state. The node has "
             "NOT been saved.");
 
@@ -1655,7 +1710,7 @@ void EspNowHubClass::PollRegistration()
         // The child Device exists and the hub cannot remember it. Reported
         // honestly rather than as a success: on the next boot this hub will not
         // declare that child and the Control Server will disable it.
-        Serial.println(
+        DEBUG_LOG(
             "[EspNowHub] The node registered but could not be written to NVS.");
 
         EndSession(
@@ -1666,12 +1721,12 @@ void EspNowHubClass::PollRegistration()
     }
 
 
-    Serial.print(
+    DEBUG_LOG_PRINT(
         "[EspNowHub] Node added. This hub now holds ");
 
-    Serial.print(_nodeCount);
+    DEBUG_LOG_PRINT(_nodeCount);
 
-    Serial.println(" node(s).");
+    DEBUG_LOG(" node(s).");
 
 
     EndSession(
@@ -1766,12 +1821,12 @@ void EspNowHubClass::Report(
         // holds the session in memory and will report the hub unreachable, and
         // a queue of stale phases arriving after the user gave up would be
         // worse than silence.
-        Serial.print(
+        DEBUG_LOG_PRINT(
             "[EspNowHub] Could not publish the discovery phase '");
 
-        Serial.print(phase);
+        DEBUG_LOG_PRINT(phase);
 
-        Serial.println("' - MQTT is not connected.");
+        DEBUG_LOG("' - MQTT is not connected.");
     }
 }
 
@@ -1816,6 +1871,332 @@ bool EspNowHubClass::IsAdopted(
 int EspNowHubClass::NodeCount() const
 {
     return _nodeCount;
+}
+
+
+void EspNowHubClass::setNodeHeartbeat(
+    unsigned long expectedMs,
+    unsigned long graceMs)
+{
+    if (expectedMs == 0)
+    {
+        DEBUG_LOG(
+            "[EspNowHub] An expected node heartbeat of 0 was ignored: every "
+            "adopted node would be reported offline immediately.");
+
+        return;
+    }
+
+
+    _nodeExpectedInterval = expectedMs;
+
+    _nodeGracePeriod = graceMs;
+}
+
+
+int EspNowHubClass::IndexOfNode(
+    const String& mac) const
+{
+    for (int i = 0; i < _nodeCount; i++)
+    {
+        if (_nodes[i].mac == mac) return i;
+    }
+
+    return -1;
+}
+
+
+// ==================================================
+// Milestone 41 - node reports
+// ==================================================
+
+void EspNowHubClass::HandleNodeReport(
+    const HsNodeReport& report)
+{
+    // Addressed to THIS hub, and says so. The same check
+    // HandleRelationshipCheck makes, for the same reason: ESP-NOW hands us
+    // frames we are the destination of, but a node's stored hub MAC is the
+    // thing being asserted and it has to be the thing we compare.
+    if (memcmp(report.hubMac, _hubMac, 6) != 0)
+    {
+        return;
+    }
+
+
+    String nodeMacText =
+        HsEspNow::FormatMac(report.nodeMac);
+
+
+    int index = IndexOfNode(nodeMacText);
+
+
+    if (index < 0)
+    {
+        // --------------------------------------------------
+        // A node this hub has not adopted
+        // --------------------------------------------------
+        //
+        // REFUSED, and that is the whole point of the branch. Registration is
+        // the only thing that creates a child Device, and it is reached by
+        // onboarding; a node that could bring one into existence by reporting
+        // would be an unauthenticated device-creation path.
+        //
+        // It is still ACKed - with accepted = 0 - rather than ignored, so the
+        // node stops retrying and sleeps instead of burning its battery
+        // against a hub that is never going to want it.
+        DEBUG_LOG_PRINT(
+            "[EspNowHub] Refused a report from ");
+
+        DEBUG_LOG_PRINT(nodeMacText);
+
+        DEBUG_LOG(
+            ", which this hub has not adopted.");
+
+
+        SendNodeReportAck(
+            report.nodeMac,
+            report.header.sessionId,
+            false,
+            REASON_MALFORMED);
+
+        return;
+    }
+
+
+    // --------------------------------------------------
+    // ACK FIRST
+    // --------------------------------------------------
+    //
+    // Before the publish, before the log, before anything that could take a
+    // millisecond longer than it has to. The node is awake with its radio on
+    // waiting for this, and every millisecond it waits is battery.
+    //
+    // And accepted = 1 means THE HUB OWNS THIS REPORT NOW - not that the
+    // Control Server has it. The hub is mains powered and can retry; the node
+    // cannot wait on Wi-Fi, MQTT and a server round trip. The cost is stated
+    // rather than hidden: a hub that loses power holding a pending reading
+    // loses it until the node's next wake, at most one interval later.
+    SendNodeReportAck(
+        report.nodeMac,
+        report.header.sessionId,
+        true,
+        REASON_NONE);
+
+
+    _liveness[index].lastHeardAt = millis();
+
+    _liveness[index].hasPending = true;
+
+    _liveness[index].pendingState = (int)report.state;
+
+
+    DEBUG_LOG_PRINT(
+        "[EspNowHub] NODE_REPORT from ");
+
+    DEBUG_LOG_PRINT(nodeMacText);
+
+    DEBUG_LOG_PRINT(" state=");
+
+    DEBUG_LOG_PRINT((int)report.state);
+
+    DEBUG_LOG_PRINT(" wake=");
+
+    DEBUG_LOG_PRINT(report.wakeReason);
+
+    DEBUG_LOG_PRINT(" recovering=");
+
+    DEBUG_LOG(report.recovering);
+
+
+    // A node that had been reported offline has just proved otherwise. Sent
+    // here rather than waiting for the next review so the household sees a
+    // sensor come back the moment it does.
+    if (_liveness[index].reportedOffline)
+    {
+        PublishNodeAvailability(index, true);
+    }
+}
+
+
+void EspNowHubClass::SendNodeReportAck(
+    const uint8_t* nodeMac,
+    uint32_t sessionId,
+    bool accepted,
+    uint8_t reason)
+{
+    if (!EnsureReplyPeer(nodeMac))
+    {
+        DEBUG_LOG(
+            "[EspNowHub] Could not add the reporting node as a peer; its "
+            "report cannot be acknowledged.");
+
+        return;
+    }
+
+
+    HsNodeReportAck ack = {};
+
+    ack.header.magic = HS_ESPNOW_MAGIC;
+    ack.header.protocolVersion = HS_ESPNOW_VERSION;
+    ack.header.msgType = MSG_NODE_REPORT_ACK;
+    ack.header.sequence = 0;
+
+    // The NODE'S session id, echoed. This exchange belongs to the node, and
+    // the hub's own _sessionId - which may be mid-discovery for somebody else
+    // entirely - has nothing to do with it.
+    ack.header.sessionId = sessionId;
+
+    memcpy(ack.hubMac, _hubMac, 6);
+    memcpy(ack.nodeMac, nodeMac, 6);
+
+    ack.accepted = accepted ? 1 : 0;
+
+    ack.reason = reason;
+
+
+    esp_now_send(
+        nodeMac,
+        (const uint8_t*)&ack,
+        sizeof(ack));
+}
+
+
+// --------------------------------------------------
+// The readings the hub owes the Control Server
+// --------------------------------------------------
+//
+// publishState() returns false when MQTT is down, and the pending flag is
+// cleared only on a true - which is the same "advance only on a successful
+// publish" rule every sketch in this tree already follows, and is what makes a
+// reading survive a Wi-Fi drop without the node knowing or caring.
+void EspNowHubClass::PublishPendingStates()
+{
+    // Nothing can be delivered and nothing should be attempted. Checked here
+    // rather than relying on publishState()'s own false, so a long outage does
+    // not rebuild a device key and a JSON envelope for every node every pass.
+    if (!HomeShield.MqttConnected()) return;
+
+
+    for (int i = 0; i < _nodeCount; i++)
+    {
+        if (!_liveness[i].hasPending) continue;
+
+
+        String composed =
+            ComposeDeviceKey(
+                _nodes[i].deviceKey,
+                _nodes[i].mac);
+
+
+        // The DeviceKey is MANDATORY. A hub holds many children and a keyless
+        // report would be dropped by the Control Server rather than guessed
+        // at - which is correct, and is why this is never the keyless
+        // overload.
+        if (!HomeShield.publishState(composed, _liveness[i].pendingState))
+        {
+            // Left pending. The next pass of loop() tries again.
+            continue;
+        }
+
+
+        _liveness[i].hasPending = false;
+
+
+        DEBUG_LOG_PRINT(
+            "[EspNowHub] Published state ");
+
+        DEBUG_LOG_PRINT(_liveness[i].pendingState);
+
+        DEBUG_LOG_PRINT(" for '");
+
+        DEBUG_LOG_PRINT(composed);
+
+        DEBUG_LOG("'");
+    }
+}
+
+
+// --------------------------------------------------
+// Expected interval + grace, per node
+// --------------------------------------------------
+//
+// A single missed ESP-NOW packet CANNOT reach here, and that is the point. A
+// node that fails to deliver drops to its 5-minute recovery schedule and is
+// back inside a twelfth of this window; only a node that is flat, broken or
+// out of range stays quiet for an hour and five minutes.
+void EspNowHubClass::ReviewNodeLiveness()
+{
+    // An offline report that cannot be sent is not an offline report. Skipping
+    // the whole review while MQTT is down also keeps the serial log readable:
+    // without it, every late node would print one line a second for the length
+    // of the outage.
+    if (!HomeShield.MqttConnected()) return;
+
+
+    unsigned long now = millis();
+
+    unsigned long window =
+        _nodeExpectedInterval + _nodeGracePeriod;
+
+
+    for (int i = 0; i < _nodeCount; i++)
+    {
+        if (_liveness[i].reportedOffline) continue;
+
+        if (now - _liveness[i].lastHeardAt <= window) continue;
+
+
+        PublishNodeAvailability(i, false);
+    }
+}
+
+
+void EspNowHubClass::PublishNodeAvailability(
+    int index,
+    bool online)
+{
+    if (index < 0 || index >= _nodeCount) return;
+
+
+    String composed =
+        ComposeDeviceKey(
+            _nodes[index].deviceKey,
+            _nodes[index].mac);
+
+
+    bool published =
+        HomeShield.publishEvent(
+            composed,
+            DeviceEventTypes::NodeAvailability,
+            online
+                ? "{\"online\":true}"
+                : "{\"online\":false}");
+
+
+    DEBUG_LOG_PRINT(
+        "[EspNowHub] Node '");
+
+    DEBUG_LOG_PRINT(composed);
+
+    DEBUG_LOG_PRINT("' is ");
+
+    DEBUG_LOG_PRINT(online ? "ONLINE" : "OFFLINE");
+
+    DEBUG_LOG(
+        published ? " (reported)" : " (NOT reported - MQTT is down)");
+
+
+    if (!published)
+    {
+        // Left as it was, so the next review tries again. An offline report
+        // that could not be sent is not an offline report, and pretending
+        // otherwise would leave a node stuck in whichever state the outage
+        // caught it in.
+        return;
+    }
+
+
+    _liveness[index].reportedOffline = !online;
 }
 
 
@@ -1902,12 +2283,12 @@ bool EspNowHubClass::LoadRegistry()
         {
             // Skipped rather than fatal. One unreadable record must not cost
             // the household every other sensor on the hub.
-            Serial.print(
+            DEBUG_LOG_PRINT(
                 "[EspNowHub] Registry record ");
 
-            Serial.print(i);
+            DEBUG_LOG_PRINT(i);
 
-            Serial.println(" is unreadable and was skipped.");
+            DEBUG_LOG(" is unreadable and was skipped.");
 
             continue;
         }
@@ -1922,12 +2303,12 @@ bool EspNowHubClass::LoadRegistry()
     _preferences.end();
 
 
-    Serial.print(
+    DEBUG_LOG_PRINT(
         "[EspNowHub] Loaded ");
 
-    Serial.print(_nodeCount);
+    DEBUG_LOG_PRINT(_nodeCount);
 
-    Serial.println(" adopted node(s) from NVS.");
+    DEBUG_LOG(" adopted node(s) from NVS.");
 
 
     return _nodeCount > 0;
@@ -1985,6 +2366,15 @@ bool EspNowHubClass::AppendToRegistry(
 
 
     _nodes[_nodeCount] = record;
+
+    // Milestone 41. A node that has just been adopted has, by definition, just
+    // been heard from - the whole onboarding exchange happened seconds ago -
+    // so its window starts here rather than at zero.
+    _liveness[_nodeCount].lastHeardAt = millis();
+
+    _liveness[_nodeCount].reportedOffline = false;
+
+    _liveness[_nodeCount].hasPending = false;
 
     _nodeCount++;
 

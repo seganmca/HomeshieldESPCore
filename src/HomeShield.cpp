@@ -29,7 +29,7 @@ void HomeShieldClass::addDevice(
     // stands the moment it is created.
     if (_started)
     {
-        Serial.println(
+        DEBUG_LOG(
             "[HomeShield] addDevice() was called after the module had already "
             "started. It is ignored. Declare every device BEFORE calling "
             "beginModule().");
@@ -40,17 +40,17 @@ void HomeShieldClass::addDevice(
 
     if (_deviceCount >= MAX_DEVICES)
     {
-        Serial.print(
+        DEBUG_LOG_PRINT(
             "[HomeShield] addDevice() refused: this library declares at most ");
 
-        Serial.print(MAX_DEVICES);
+        DEBUG_LOG_PRINT(MAX_DEVICES);
 
-        Serial.print(
+        DEBUG_LOG_PRINT(
             " devices per module, and '");
 
-        Serial.print(deviceKey);
+        DEBUG_LOG_PRINT(deviceKey);
 
-        Serial.println(
+        DEBUG_LOG(
             "' would exceed it.");
 
         return;
@@ -60,7 +60,7 @@ void HomeShieldClass::addDevice(
     if (deviceKey.length() == 0 ||
         deviceType.length() == 0)
     {
-        Serial.println(
+        DEBUG_LOG(
             "[HomeShield] addDevice() refused: a device needs both a device key "
             "and a device type.");
 
@@ -74,12 +74,12 @@ void HomeShieldClass::addDevice(
     // forever - a local check turns that into one message at boot.
     if (IndexOf(deviceKey) >= 0)
     {
-        Serial.print(
+        DEBUG_LOG_PRINT(
             "[HomeShield] addDevice() refused: device key '");
 
-        Serial.print(deviceKey);
+        DEBUG_LOG_PRINT(deviceKey);
 
-        Serial.println(
+        DEBUG_LOG(
             "' is already declared. Device keys must be unique within a module.");
 
         return;
@@ -121,7 +121,7 @@ void HomeShieldClass::begin(
     // unpick than a board that visibly did not come up.
     if (_deviceCount > 0)
     {
-        Serial.println(
+        DEBUG_LOG(
             "[HomeShield] begin() was called after addDevice(). A module that "
             "declares its own devices must start with beginModule(moduleType, "
             "firmwareVersion). Nothing has been started.");
@@ -140,7 +140,7 @@ void HomeShieldClass::begin(
 
     if (_deviceCount != 1)
     {
-        Serial.println(
+        DEBUG_LOG(
             "[HomeShield] begin() could not declare this device. Nothing has "
             "been started.");
 
@@ -175,7 +175,7 @@ void HomeShieldClass::beginModule(
     // that follows is now load-bearing for two cases rather than one.
     if (_deviceCount == 0)
     {
-        Serial.println(
+        DEBUG_LOG(
             "[HomeShield] beginModule() was called with no devices declared. "
             "That is expected for a Sensor Hub before any node has been "
             "onboarded; it is a mistake on any other board.");
@@ -184,7 +184,7 @@ void HomeShieldClass::beginModule(
 
     if (moduleType.length() == 0)
     {
-        Serial.println(
+        DEBUG_LOG(
             "[HomeShield] beginModule() was called with no module type. Pass one "
             "from ModuleTypes.h. Nothing has been started.");
 
@@ -252,7 +252,7 @@ void HomeShieldClass::Start(
     }
     else
     {
-        Serial.println(
+        DEBUG_LOG(
             "[HomeShield] No provisioning-reset button configured. Call "
             "HomeShield.setProvisioningResetButton(pin) before begin() to "
             "allow this board to be re-onboarded.");
@@ -472,16 +472,13 @@ void HomeShieldClass::loop()
 
         if (_moduleCommandHandler != nullptr)
         {
-            Serial.print(
-                "[HomeShield] Module command dispatched: ");
-
-            Serial.println(command);
+            DEBUG_VALUE("[HomeShield] Module command dispatched", command);
 
             _moduleCommandHandler(String(command));
         }
         else
         {
-            Serial.println(
+            DEBUG_LOG(
                 "[HomeShield] A module command was queued but this sketch has "
                 "no module command handler.");
         }
@@ -495,7 +492,7 @@ void HomeShieldClass::loop()
     {
         if (millis() -
             _lastHeartbeat >=
-            HEARTBEAT_INTERVAL)
+            _heartbeatInterval)
         {
             publishHeartbeat();
 
@@ -512,7 +509,7 @@ void HomeShieldClass::setProvisioningResetButton(
 {
     if (_started)
     {
-        Serial.println(
+        DEBUG_LOG(
             "[HomeShield] setProvisioningResetButton() must be called before "
             "begin()/beginModule(). It is ignored.");
 
@@ -558,7 +555,7 @@ void HomeShieldClass::CheckResetButton()
         return;
     }
 
-    Serial.println(
+    DEBUG_LOG(
         "[HomeShield] Provisioning reset button held for 5 s.");
 
     // Milestone 40. The same code the network UNPROVISION runs, deliberately.
@@ -566,6 +563,23 @@ void HomeShieldClass::CheckResetButton()
     // and a board that ended up in a different state depending on which was
     // used would be a state nobody designed.
     Unprovision();
+}
+
+
+void HomeShieldClass::setHeartbeatInterval(
+    unsigned long milliseconds)
+{
+    if (milliseconds == 0)
+    {
+        DEBUG_LOG(
+            "[HomeShield] A heartbeat interval of 0 was ignored. A board that "
+            "never heartbeats is a board the Control Server declares offline.");
+
+        return;
+    }
+
+
+    _heartbeatInterval = milliseconds;
 }
 
 
@@ -598,7 +612,7 @@ bool HomeShieldClass::declareModuleCapability(
     // not others depending on timing.
     if (_started)
     {
-        Serial.println(
+        DEBUG_LOG(
             "[HomeShield] declareModuleCapability() was called after the module "
             "had already started. It is ignored. Declare capabilities BEFORE "
             "begin()/beginModule().");
@@ -609,7 +623,7 @@ bool HomeShieldClass::declareModuleCapability(
 
     if (capabilityKey.length() == 0)
     {
-        Serial.println(
+        DEBUG_LOG(
             "[HomeShield] declareModuleCapability() refused: the capability key "
             "is empty.");
 
@@ -628,18 +642,18 @@ bool HomeShieldClass::declareModuleCapability(
 
     if (_capabilityCount >= MAX_CAPABILITIES)
     {
-        Serial.print(
+        DEBUG_LOG_PRINT(
             "[HomeShield] declareModuleCapability() refused: this library "
             "declares at most ");
 
-        Serial.print(MAX_CAPABILITIES);
+        DEBUG_LOG_PRINT(MAX_CAPABILITIES);
 
-        Serial.print(
+        DEBUG_LOG_PRINT(
             " capabilities per module, and '");
 
-        Serial.print(capabilityKey);
+        DEBUG_LOG_PRINT(capabilityKey);
 
-        Serial.println(
+        DEBUG_LOG(
             "' would exceed it.");
 
         return false;
@@ -667,7 +681,7 @@ bool HomeShieldClass::addDeviceAtRuntime(
     if (!_started ||
         _registrationService == nullptr)
     {
-        Serial.println(
+        DEBUG_LOG(
             "[HomeShield] addDeviceAtRuntime() was called before the module "
             "started. Use addDevice() during setup instead.");
 
@@ -678,7 +692,7 @@ bool HomeShieldClass::addDeviceAtRuntime(
     if (deviceKey.length() == 0 ||
         deviceType.length() == 0)
     {
-        Serial.println(
+        DEBUG_LOG(
             "[HomeShield] addDeviceAtRuntime() refused: a device needs both a "
             "device key and a device type.");
 
@@ -691,12 +705,12 @@ bool HomeShieldClass::addDeviceAtRuntime(
     // means the thing it thinks it adopted is not the thing that is there.
     if (IndexOf(deviceKey) >= 0)
     {
-        Serial.print(
+        DEBUG_LOG_PRINT(
             "[HomeShield] addDeviceAtRuntime() refused: device key '");
 
-        Serial.print(deviceKey);
+        DEBUG_LOG_PRINT(deviceKey);
 
-        Serial.println(
+        DEBUG_LOG(
             "' is already declared.");
 
         return false;
@@ -705,13 +719,13 @@ bool HomeShieldClass::addDeviceAtRuntime(
 
     if (_deviceCount >= MAX_DEVICES)
     {
-        Serial.print(
+        DEBUG_LOG_PRINT(
             "[HomeShield] addDeviceAtRuntime() refused: this library declares "
             "at most ");
 
-        Serial.print(MAX_DEVICES);
+        DEBUG_LOG_PRINT(MAX_DEVICES);
 
-        Serial.println(
+        DEBUG_LOG(
             " devices per module.");
 
         return false;
@@ -868,16 +882,13 @@ void HomeShieldClass::OnMqttMessage(
         if (!JsonLite::ReadString(message, "command", command) ||
             command != UNPROVISION_COMMAND)
         {
-            Serial.print(
-                "[HomeShield] Ignored an unrecognised provisioning command: ");
-
-            Serial.println(message);
+            DEBUG_VALUE("[HomeShield] Ignored an unrecognised provisioning command", message);
 
             return;
         }
 
 
-        Serial.println(
+        DEBUG_LOG(
             "[HomeShield] UNPROVISION received. Clearing provisioning after "
             "this MQTT callback returns.");
 
@@ -918,7 +929,7 @@ void HomeShieldClass::OnMqttMessage(
 // would be replying about.
 void HomeShieldClass::Unprovision()
 {
-    Serial.println(
+    DEBUG_LOG(
         "[HomeShield] Unprovisioning: clearing the HomeShield configuration.");
 
 
@@ -936,7 +947,7 @@ void HomeShieldClass::Unprovision()
         // its serial port, which is the only thing that tells somebody it needs
         // erasing by hand. Refusing to reboot would leave it running against a
         // server that has forgotten it, silently.
-        Serial.println(
+        DEBUG_LOG(
             "[HomeShield] WARNING: the provisioning configuration could NOT be "
             "verified as cleared. Restarting anyway - if this board comes back "
             "provisioned, its NVS must be erased manually.");
@@ -953,7 +964,7 @@ void HomeShieldClass::Unprovision()
     delay(100);
 
 
-    Serial.println(
+    DEBUG_LOG(
         "[HomeShield] Unprovisioned. Restarting into BLE onboarding.");
 
     Serial.flush();
@@ -1049,12 +1060,12 @@ void HomeShieldClass::Dispatch(
             // into the buffer PubSubClient is still reading.
             if (command.length() > MAX_MODULE_COMMAND)
             {
-                Serial.print(
+                DEBUG_LOG_PRINT(
                     "[HomeShield] Dropped a module command longer than ");
 
-                Serial.print(MAX_MODULE_COMMAND);
+                DEBUG_LOG_PRINT(MAX_MODULE_COMMAND);
 
-                Serial.println(" characters.");
+                DEBUG_LOG(" characters.");
 
                 return;
             }
@@ -1073,10 +1084,7 @@ void HomeShieldClass::Dispatch(
             portEXIT_CRITICAL(&_moduleCommandLock);
 
 
-            Serial.print(
-                "[HomeShield] Module command queued: ");
-
-            Serial.println(command);
+            DEBUG_VALUE("[HomeShield] Module command queued", command);
 
             return;
         }
@@ -1208,7 +1216,7 @@ bool HomeShieldClass::publishEvent(
 {
     if (_deviceCount != 1)
     {
-        Serial.println(
+        DEBUG_LOG(
             "[HomeShield] A key-less publish was refused: this module holds more "
             "than one device, so the report must name one with "
             "publishState(deviceKey, state) or publishEvent(deviceKey, ...).");

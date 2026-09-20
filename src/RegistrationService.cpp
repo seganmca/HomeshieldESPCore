@@ -254,14 +254,14 @@ bool RegistrationService::RegisterOnce()
         // it is called out rather than buried in the retry loop.
         if (result.statusCode == 422)
         {
-            Serial.println(
+            DEBUG_LOG(
                 "[HomeShield] Module registration REFUSED (HTTP 422). The "
                 "declaration is wrong, not the connection - check the device "
                 "types, the device keys, and that a multi-device board declares "
                 "its module type. Retrying will not help until the sketch is "
                 "corrected.");
 
-            Serial.println(
+            DEBUG_LOG(
                 result.response);
         }
         else

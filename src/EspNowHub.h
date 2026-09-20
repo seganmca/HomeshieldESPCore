@@ -104,6 +104,23 @@ public:
     int NodeCount() const;
 
 
+    // --------------------------------------------------
+    // Node liveness policy (milestone 41)
+    // --------------------------------------------------
+    //
+    // How often an adopted node is expected to report, and how long
+    // after a missed one the hub waits before saying so. Defaults
+    // are the approved 1 hour and 5 minutes, and they must stay in
+    // step with the node's own EspNowNodeSleep.normalWakeSeconds:
+    // a hub that expected a node more often than the node wakes
+    // would report a healthy sensor offline every hour.
+    //
+    // Call before or after begin(); it is read on each review.
+    void setNodeHeartbeat(
+        unsigned long expectedMs,
+        unsigned long graceMs);
+
+
 private:
 
     enum class State
@@ -138,6 +155,39 @@ private:
     };
 
 
+    // --------------------------------------------------
+    // What the hub knows about one node right now (M41)
+    // --------------------------------------------------
+    //
+    // RAM only, and deliberately: it describes the last hour, not
+    // the relationship. A hub that restarts has genuinely not heard
+    // from anything yet, and persisting a stale "last heard" would
+    // let it declare a healthy node offline on the strength of a
+    // number from before the power cut.
+    //
+    // Parallel to _nodes[] by index rather than a member of
+    // NodeRecord, because NodeRecord is the PERSISTED shape - it is
+    // what EncodeRecord writes - and mixing a runtime observation
+    // into it would put this in NVS by accident.
+    struct NodeLiveness
+    {
+        // millis(). Unsigned subtraction is correct across the
+        // 49-day rollover for any window shorter than that, and the
+        // longest here is 65 minutes.
+        unsigned long lastHeardAt = 0;
+
+        // Whether this hub has published an offline report for this
+        // node that it has not yet taken back. It is what makes the
+        // report edge-triggered instead of once a second.
+        bool reportedOffline = false;
+
+        // A reading the hub has ACKed and owes the Control Server.
+        bool hasPending = false;
+
+        int pendingState = 0;
+    };
+
+
     void StartRadio();
 
     void Broadcast();
@@ -160,6 +210,41 @@ private:
     void SendAck(
         bool accepted,
         uint8_t reason);
+
+
+    // --------------------------------------------------
+    // Milestone 41
+    // --------------------------------------------------
+
+    // A report from an adopted node: ACK it, stamp it, and queue
+    // the reading for publication.
+    void HandleNodeReport(
+        const HsNodeReport& report);
+
+    void SendNodeReportAck(
+        const uint8_t* nodeMac,
+        uint32_t sessionId,
+        bool accepted,
+        uint8_t reason);
+
+    // Publishes whatever reports have been ACKed but not yet
+    // delivered to the Control Server. Called from loop().
+    void PublishPendingStates();
+
+    // The expected-interval + grace check, per node.
+    void ReviewNodeLiveness();
+
+    void PublishNodeAvailability(
+        int index,
+        bool online);
+
+    // The shared reply-peer slot, used both to answer a
+    // relationship check (M40) and to ACK a report (M41).
+    bool EnsureReplyPeer(
+        const uint8_t* mac);
+
+    int IndexOfNode(
+        const String& mac) const;
 
     bool AddNodePeer();
 
@@ -320,6 +405,22 @@ private:
     static constexpr unsigned long StatusInterval = 5000;
 
 
+    // --------------------------------------------------
+    // Node liveness (milestone 41)
+    // --------------------------------------------------
+
+    unsigned long _nodeExpectedInterval = 3600UL * 1000UL;
+
+    unsigned long _nodeGracePeriod = 300UL * 1000UL;
+
+    unsigned long _lastLivenessReviewAt = 0;
+
+    // Once a second is far more often than a 65-minute window
+    // needs, and is what keeps the check off the hot path of a
+    // loop that also runs a 500 ms broadcast.
+    static constexpr unsigned long LivenessReviewInterval = 1000;
+
+
     unsigned long _lastAckAt = 0;
 
     int _ackAttempts = 0;
@@ -338,6 +439,17 @@ private:
     static constexpr int MAX_NODES = 12;
 
     NodeRecord _nodes[MAX_NODES];
+
+    // Parallel to _nodes[] BY INDEX. Declared here rather than beside
+    // NodeLiveness itself because a member array's bound must already
+    // be declared where the array is - a class body is not a complete-
+    // class context for that, only for member function bodies - and
+    // MAX_NODES is declared on the line above.
+    //
+    // Keeping the two arrays adjacent is also the honest placement:
+    // _liveness[i] describes _nodes[i], and anything that changes one
+    // index has to change the other.
+    NodeLiveness _liveness[MAX_NODES];
 
     int _nodeCount = 0;
 

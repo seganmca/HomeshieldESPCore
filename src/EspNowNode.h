@@ -62,6 +62,79 @@
 // MAC is eFuse and is never written by anything here.
 // ============================================================
 
+// ============================================================
+// Sensor node sleep and delivery policy (milestone 41)
+// ============================================================
+//
+// Every number M41 makes configurable, in one struct, with the
+// approved defaults already in it. A sketch that is happy with
+// them does not call configureSleep() at all.
+//
+// The two intervals are the whole of the recovery behaviour: a
+// node that got its ACK sleeps for normalWakeSeconds, a node that
+// did not sleeps for recoveryWakeSeconds and keeps doing so until
+// one arrives. There is no third schedule and no backoff - a
+// battery node that kept lengthening its retry would take longer
+// to recover the longer the hub had been away, which is exactly
+// backwards.
+struct EspNowNodeSleep
+{
+    // NormalWakeInterval. One hour.
+    uint32_t normalWakeSeconds = 3600;
+
+    // RecoveryWakeInterval. Five minutes, used ONLY after a failed
+    // delivery and only until the next successful one.
+    uint32_t recoveryWakeSeconds = 300;
+
+    // Bounded ACK attempts per wake. After these the node SLEEPS;
+    // it never stays awake retrying, which is the point.
+    int maxAttempts = 3;
+
+    // How long one attempt waits for the ACK. Short: the hub
+    // answers from its receive path, and a node holding its radio
+    // open is spending the battery this milestone exists to save.
+    uint32_t retryIntervalMs = 400;
+
+    // The dedicated reset / manual wake input. -1 = not wired.
+    // Held for resetHoldMs at boot, it clears this node's stored
+    // hub relationship and restarts it into discovery; tapped, it
+    // is simply a manual report.
+    int resetPin = -1;
+
+    bool resetActiveLow = true;
+
+    uint32_t resetHoldMs = 5000;
+};
+
+
+// --------------------------------------------------
+// How a wake pin is wired (milestone 41)
+// --------------------------------------------------
+//
+// Which resistor holds the pin at its IDLE level while the node
+// sleeps. It follows the WIRING and never the wake level: a
+// switch to ground idles HIGH and needs a pull-up whichever edge
+// is being watched for, and a switch to supply idles LOW and
+// needs a pull-down.
+//
+// It has to be said here because the SDK gets it wrong for us.
+// esp_deep_sleep_start() sets the resistor from the WAKE MODE
+// (pull-down for a wake-on-HIGH pin), which is right only if the
+// sensor drives the line both ways. Ours do not: they are
+// switches. So the pad is configured from this and then held,
+// and the hold is what stops the SDK overwriting it.
+enum HsWakePull : uint8_t
+{
+    // Switch to ground. Idles HIGH. Both tank floats as originally
+    // wired, the reed switch, and every reset button.
+    HS_WAKE_PULL_UP = 0,
+
+    // Switch to supply, or a sensor that drives the line high.
+    // Idles LOW; "active" is HIGH.
+    HS_WAKE_PULL_DOWN = 1,
+};
+
+
 class EspNowNodeClass
 {
 public:
@@ -81,6 +154,100 @@ public:
 
 
     void loop();
+
+
+    // ==================================================
+    // Milestone 41 - reporting and deep sleep
+    // ==================================================
+
+    // Policy. Call BEFORE begin(): the reset pin is sampled during
+    // begin(), and the wake intervals are read when the node goes
+    // back to sleep.
+    void configureSleep(
+        const EspNowNodeSleep& sleep);
+
+
+    // --------------------------------------------------
+    // Declare a GPIO that may wake this node
+    // --------------------------------------------------
+    //
+    // Must be a deep-sleep-wake-capable GPIO on this part. On the
+    // ESP32-C3 that is GPIO 0-5 and nothing else - soc_caps.h says
+    // so outright:
+    //
+    //   SOC_GPIO_DEEP_SLEEP_WAKE_VALID_GPIO_MASK
+    //       (0ULL | BIT0 | BIT1 | BIT2 | BIT3 | BIT4 | BIT5)
+    //
+    // Any other pin is REFUSED here, with a warning, rather than
+    // accepted and silently unable to fire: esp_deep_sleep_enable_
+    // gpio_wakeup() answers ESP_ERR_INVALID_ARG for it, and a
+    // sensor that is read correctly on every wake but can never
+    // CAUSE one is the hardest version of this fault to see from
+    // the outside. A refused pin is still read normally while the
+    // node is awake; it just cannot end a sleep.
+    //
+    // Wakes on CHANGE, in either direction. At each sleep the pin
+    // is armed for the level it is not currently at, so a door
+    // wakes the node both when it opens and when it closes. The
+    // caller does not declare a polarity and must not assume one:
+    // "active" and "interesting" are different properties, and a
+    // sensor's two edges are usually both worth reporting.
+    //
+    // The C3's GPIO wake is level triggered, but the level is per
+    // pin: EnterDeepSleep() arms each one individually with
+    // gpio_deep_sleep_wakeup_enable(), so pins resting at opposite
+    // levels are all armed in the same sleep and none is dropped.
+    // A tank's full float can wait for a rising edge while its
+    // empty float waits for a falling one.
+    //
+    // `pull` says how the pin is wired, and it is not optional
+    // information: the SDK sets each pad's resistor from the WAKE
+    // MODE inside esp_deep_sleep_start and would get a switch
+    // backwards. EnterDeepSleep() applies this pull and then holds
+    // the pad so the SDK cannot overwrite it.
+    //
+    // The pin does need a pull-up and a switch to ground, which is
+    // how every input in this tree is wired - the pull-up is
+    // enabled for the sleep so a released input reads HIGH rather
+    // than floating.
+    //
+    // Call before begin(). Returns false when the table is full.
+    bool addWakePin(
+        uint8_t gpio,
+        HsWakePull pull = HS_WAKE_PULL_UP);
+
+
+    // --------------------------------------------------
+    // The whole of an adopted node's working life
+    // --------------------------------------------------
+    //
+    // Send `state` to the hub, wait for the ACK, and deep sleep.
+    // DOES NOT RETURN: it ends in esp_deep_sleep_start(), and the
+    // next thing that runs is setup() after the next wake.
+    //
+    // It returns immediately and without sleeping when this node
+    // is not provisioned, or has not finished settling: an
+    // unadopted node must stay awake and discoverable, and a
+    // sleeping one cannot be found (M38's "Turn on the sensor node
+    // to continue" depends on this).
+    //
+    // The sketch passes the reading rather than this class taking
+    // it, because what a state MEANS is the sketch's - a tank's
+    // three float positions are not something the framework should
+    // know.
+    void reportAndSleep(
+        int state);
+
+
+    // Why this boot happened. WAKE_POWER_ON on a cold boot or a
+    // reset, which is the only wake that runs M40's relationship
+    // check.
+    HsNodeWake WakeReason() const;
+
+
+    // Whether this node is on the 5-minute recovery schedule
+    // because its last delivery was not acknowledged.
+    bool IsRecovering() const;
 
 
     bool IsProvisioned() const;
@@ -169,6 +336,44 @@ private:
 
     void SendConfirm(
         bool stored);
+
+
+    // --------------------------------------------------
+    // Milestone 41
+    // --------------------------------------------------
+
+    // Works out why this boot happened, and samples the reset pin.
+    // Returns true when the reset was held and this node has been
+    // unprovisioned (the caller must then stop: a restart follows).
+    bool ClassifyWakeAndCheckReset();
+
+    // One attempt: point the peer at `channel`, send the report,
+    // and wait up to retryIntervalMs for a matching ACK.
+    bool SendReportOnChannel(
+        uint8_t channel,
+        int state);
+
+    // Up to maxAttempts attempts across the cached channel and,
+    // if that fails, the whole sweep. True when acknowledged.
+    bool DeliverReport(
+        int state);
+
+    void EnterDeepSleep(
+        bool delivered);
+
+    // Releases the pad holds EnterDeepSleep() applied. A held pad keeps its
+    // frozen configuration across the deep-sleep reset and ignores writes
+    // until it is released, so this must run before anything reads a wake
+    // pin - otherwise every read after a GPIO wake returns the level the pad
+    // was frozen at rather than the level the sensor is at.
+    void ReleaseWakePinHolds();
+
+    // The hub's channel, learned at adoption and re-learned by a
+    // sweep. 0 = not known.
+    uint8_t CachedChannel() const;
+
+    void RememberChannel(
+        uint8_t channel);
 
     bool AddHubPeer();
 
@@ -301,6 +506,44 @@ private:
     // never grant one.
     bool _persisted = false;
 
+
+    // --------------------------------------------------
+    // Milestone 41 state
+    // --------------------------------------------------
+
+    EspNowNodeSleep _sleep;
+
+    static constexpr int MaxWakePins = 4;
+
+    uint8_t _wakePins[MaxWakePins] = {0};
+
+    // Parallel to _wakePins by index. See HsWakePull.
+    HsWakePull _wakePull[MaxWakePins] = {HS_WAKE_PULL_UP};
+
+    int _wakePinCount = 0;
+
+    HsNodeWake _wakeReason = WAKE_POWER_ON;
+
+    // Which GPIOs actually caused the wake, latched by the hardware and read
+    // before anything reconfigures a pad. BIT(n) set means GPIO n fired. Zero
+    // for a timer or power-on wake.
+    uint64_t _wakeGpioStatus = 0;
+
+    // The channel the hub was last heard on. RAM copy of whichever
+    // of the RTC and NVS caches answered; 0 when neither did.
+    uint8_t _hubChannel = 0;
+
+    // Set by the send callback so a failed transmission ends the
+    // ACK wait immediately instead of burning retryIntervalMs on a
+    // frame that provably never left.
+    volatile bool _lastSendReported = false;
+
+    volatile bool _lastSendOk = false;
+
+    // Set while DeliverReport() is waiting, and cleared by a
+    // matching MSG_NODE_REPORT_ACK.
+    bool _reportAcked = false;
+
     // The node sends one check per channel visit, so a full sweep
     // is one attempt on every channel the hub could be on. Two
     // sweeps - about 16 s - then it gives up and stays provisioned.
@@ -367,6 +610,17 @@ private:
     static constexpr const char* VersionKey = "node_ver";
 
     static constexpr const char* StateKey = "node_state";
+
+    // Milestone 41. The channel the hub was on when this node was
+    // adopted, so an hourly wake can transmit at once instead of
+    // sweeping 1-13 with the radio up - up to 7.8 s, which is the
+    // most expensive thing a battery node can do.
+    //
+    // It is a CACHE and never load bearing: a wrong value costs
+    // one sweep and is then corrected, and a missing one costs a
+    // sweep on the first wake. It is deliberately NOT part of the
+    // commit marker's contract for that reason.
+    static constexpr const char* HubChannelKey = "hub_ch";
 
     static constexpr int CurrentVersion = 1;
 };
