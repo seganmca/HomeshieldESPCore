@@ -760,6 +760,81 @@ bool HomeShieldClass::addDeviceAtRuntime(
 }
 
 
+// ==================================================
+// Losing a device at runtime (milestone 42)
+// ==================================================
+
+bool HomeShieldClass::removeDeviceAtRuntime(
+    const String& deviceKey)
+{
+    if (!_started ||
+        _registrationService == nullptr)
+    {
+        DEBUG_LOG(
+            "[HomeShield] removeDeviceAtRuntime() was called before the module "
+            "started.");
+
+        return false;
+    }
+
+
+    int index = IndexOf(deviceKey);
+
+    if (index < 0)
+    {
+        DEBUG_VALUE(
+            "[HomeShield] removeDeviceAtRuntime() refused: no such device key: ",
+            deviceKey);
+
+        return false;
+    }
+
+
+    // COMPACTED FIRST, count lowered second - the opposite order to
+    // addDeviceAtRuntime(), and for the same underlying reason.
+    //
+    // The registration task reads this array through a pointer it already
+    // holds, but only while it is trying to register: once _registered is true
+    // it does not touch it again until something clears the flag. Redeclare()
+    // is what clears it, so compacting before that call means the task cannot
+    // observe a half-shifted array. Lowering the count first would expose a
+    // window in which the list still contained the removed key and had lost
+    // the last one instead.
+    for (int i = index; i < _deviceCount - 1; i++)
+    {
+        _devices[i] = _devices[i + 1];
+    }
+
+    // The vacated tail slot is cleared rather than left holding the last
+    // device's strings. Nothing reads past the count, but a stale duplicate
+    // sitting there is exactly the kind of thing a future reader trusts.
+    _devices[_deviceCount - 1] = DeclaredDevice{};
+
+
+    _reRegistering = true;
+
+    _reRegistrationResult =
+        ReRegistration::InProgress;
+
+
+    // Publishes the new count under the service's own lock and clears the
+    // registered flag, so the task re-registers within a second with a
+    // declaration that no longer mentions this child.
+    _registrationService->Redeclare(
+        _deviceCount - 1);
+
+
+    _deviceCount--;
+
+
+    DEBUG_VALUE(
+        "[HomeShield] Device removed at runtime: ",
+        deviceKey);
+
+    return true;
+}
+
+
 HomeShieldClass::ReRegistration
 HomeShieldClass::reRegistrationState()
 {

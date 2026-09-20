@@ -604,6 +604,22 @@ bool EspNowHubClass::handleModuleCommand(
     }
 
 
+    // Milestone 42. The counterpart of DISCOVER_NODE, sent after the Control
+    // Server has deleted the child Device this node stands for.
+    if (command.startsWith("FORGET_NODE:"))
+    {
+        String target =
+            command.substring(
+                strlen("FORGET_NODE:"));
+
+        DEBUG_VALUE("[EspNowHub] -> forget requested", target);
+
+        ForgetNode(target);
+
+        return true;
+    }
+
+
     if (command == "CANCEL_NODE_DISCOVERY")
     {
         DEBUG_LOG(
@@ -2312,6 +2328,219 @@ bool EspNowHubClass::LoadRegistry()
 
 
     return _nodeCount > 0;
+}
+
+
+// ==================================================
+// Forgetting one node (milestone 42)
+// ==================================================
+//
+// The hub catching up with a deletion that has already happened on the Control
+// Server. It is NOT a deletion in its own right: nothing is reported, nothing
+// is acknowledged, and the household's Device is gone from their app either
+// way.
+//
+// Three things go, in the order that keeps them consistent with each other:
+//
+//   1. NVS, because that is what survives a power cut and what the next boot
+//      re-declares from.
+//   2. The in-RAM registry and its parallel liveness array, because that is
+//      what answers a relationship check and what the offline monitor walks.
+//   3. The module's DECLARATION, because a registration POSTs the whole list
+//      and the Control Server reads it as the complete truth about a module's
+//      children - a hub that kept declaring this child would re-create the
+//      very Device the server just deleted, on the next reconnect.
+//
+// NVS first. If the write fails, nothing else is touched: a hub whose RAM and
+// declaration disagreed with its NVS would forget the node until it rebooted
+// and then have it back.
+//
+// The hub itself stays provisioned. This is the difference between M42 and
+// M40's UNPROVISION that the requirement is explicit about, and it is visible
+// here: no marker is cleared, no namespace is wiped, nothing restarts.
+//
+// Unknown MACs are a no-op, not an error. The server may send this for a node
+// that a re-flashed or re-onboarded hub no longer has, and "forget something
+// you do not have" is already true.
+void EspNowHubClass::ForgetNode(
+    const String& macText)
+{
+    String target = macText;
+
+    target.trim();
+
+    target.toUpperCase();
+
+
+    uint8_t parsed[6];
+
+    if (!HsEspNow::ParseMac(target, parsed))
+    {
+        DEBUG_LOG_PRINT(
+            "[EspNowHub] Refused a forget: '");
+
+        DEBUG_LOG_PRINT(target);
+
+        DEBUG_LOG(
+            "' is not twelve hexadecimal characters.");
+
+        return;
+    }
+
+
+    int index = IndexOfNode(target);
+
+    if (index < 0)
+    {
+        DEBUG_LOG_PRINT(
+            "[EspNowHub] Nothing to forget: ");
+
+        DEBUG_LOG_PRINT(target);
+
+        DEBUG_LOG(" is not in this hub's registry.");
+
+        return;
+    }
+
+
+    // Composed before the record moves. It is the module-local key the child
+    // was declared under, and it is derived from the record's own fields.
+    String composed =
+        ComposeDeviceKey(
+            _nodes[index].deviceKey,
+            _nodes[index].mac);
+
+
+    if (!RemoveFromRegistry(index))
+    {
+        // Nothing else is touched. See the remark above.
+        DEBUG_LOG_PRINT(
+            "[EspNowHub] Could not remove ");
+
+        DEBUG_LOG_PRINT(target);
+
+        DEBUG_LOG(
+            " from NVS. The node is still adopted; nothing was changed.");
+
+        return;
+    }
+
+
+    // RAM, both arrays, by the same index - _liveness[i] describes _nodes[i]
+    // and anything that moves one has to move the other.
+    for (int i = index; i < _nodeCount - 1; i++)
+    {
+        _nodes[i] = _nodes[i + 1];
+
+        _liveness[i] = _liveness[i + 1];
+    }
+
+    _nodes[_nodeCount - 1] = NodeRecord{};
+
+    _liveness[_nodeCount - 1] = NodeLiveness{};
+
+    _nodeCount--;
+
+
+    // The declaration. Failure here is logged and not fatal: NVS is already
+    // correct, so the next boot declares the right children whatever happens.
+    if (!HomeShield.removeDeviceAtRuntime(composed))
+    {
+        DEBUG_LOG_PRINT(
+            "[EspNowHub] Forgot ");
+
+        DEBUG_LOG_PRINT(target);
+
+        DEBUG_LOG(
+            " but its device was not declared; nothing to re-declare.");
+    }
+
+
+    DEBUG_LOG_PRINT(
+        "[EspNowHub] Forgot node ");
+
+    DEBUG_LOG_PRINT(target);
+
+    DEBUG_LOG_PRINT(" ('");
+
+    DEBUG_LOG_PRINT(composed);
+
+    DEBUG_LOG_PRINT("'). Registry now holds ");
+
+    DEBUG_LOG_PRINT(_nodeCount);
+
+    DEBUG_LOG(" node(s). This hub stays provisioned.");
+}
+
+
+// Rewrites the registry without one record.
+//
+// The write order is AppendToRegistry's, read backwards: the records that move
+// are written and verified FIRST, then the count comes down, then the marker
+// is re-affirmed, and only then is the now-unreferenced tail key erased.
+//
+// A power cut before the count moves therefore leaves a registry whose last
+// slot duplicates the one before it. That is the harmless failure of the two:
+// LoadRegistry() reads it, HomeShield.addDevice() refuses the duplicate key,
+// and the hub comes up with the correct children minus nothing. A count that
+// moved before the records did would drop the wrong node instead.
+bool EspNowHubClass::RemoveFromRegistry(
+    int index)
+{
+    if (index < 0 || index >= _nodeCount) return false;
+
+
+    if (!_preferences.begin(Namespace, false)) return false;
+
+
+    bool ok = true;
+
+    // Every record after the removed one shifts down one slot.
+    for (int i = index; ok && i < _nodeCount - 1; i++)
+    {
+        String key = "n" + String(i);
+
+        String text = EncodeRecord(_nodes[i + 1]);
+
+        ok = _preferences.putString(key.c_str(), text) > 0;
+
+        // Verified before anything points at it, exactly as an append is.
+        ok = ok &&
+            _preferences.getString(key.c_str(), "") == text;
+    }
+
+
+    // The count SECOND.
+    if (ok)
+    {
+        ok = _preferences.putInt(CountKey, _nodeCount - 1) > 0;
+    }
+
+
+    // The marker LAST. Re-affirmed rather than left alone so that a registry
+    // which has just become empty is still a COMMITTED empty registry - and so
+    // this method writes the same three things an append does, in the same
+    // order.
+    if (ok)
+    {
+        ok = _preferences.putInt(StateKey, 1) > 0;
+    }
+
+
+    // The tail key is now referenced by nothing. Removed so a later append
+    // cannot read a stale record if the count and the keys ever disagree.
+    if (ok)
+    {
+        String tail = "n" + String(_nodeCount - 1);
+
+        _preferences.remove(tail.c_str());
+    }
+
+
+    _preferences.end();
+
+
+    return ok;
 }
 
 

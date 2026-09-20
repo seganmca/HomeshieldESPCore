@@ -93,6 +93,7 @@ public:
     // Fed from the sketch's ModuleCommandHandler. Understands:
     //
     //   DISCOVER_NODE:70AF0935923C
+    //   FORGET_NODE:70AF0935923C
     //   CANCEL_NODE_DISCOVERY
     //
     // Anything else is ignored and said so on the serial port.
@@ -291,6 +292,23 @@ private:
 
     bool AppendToRegistry(
         const NodeRecord& record);
+
+
+    // Milestone 42. Drops one adopted node - from NVS, from
+    // _nodes[]/_liveness[], and from the module's declaration.
+    //
+    // The server-side Device is already gone by the time this
+    // runs; this is the hub catching up with it, so the node
+    // stops being re-declared and becomes eligible for the
+    // existing onboarding lifecycle again.
+    void ForgetNode(
+        const String& macText);
+
+
+    // Rewrites the registry without the record at [index].
+    // Returns false and leaves NVS alone if it cannot.
+    bool RemoveFromRegistry(
+        int index);
 
 
     static String EncodeRecord(

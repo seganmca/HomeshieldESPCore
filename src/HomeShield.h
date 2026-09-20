@@ -266,6 +266,37 @@ public:
 
 
     // --------------------------------------------------
+    // Losing a device at runtime (milestone 42)
+    // --------------------------------------------------
+    //
+    // The exact inverse of addDeviceAtRuntime(), and it exists
+    // for one caller: a Sensor Hub that has been told to forget
+    // a node it adopted.
+    //
+    // It is NOT optional bookkeeping. A registration POSTs the
+    // WHOLE declaration, and the Control Server reads it as the
+    // complete truth about a module's children - so a hub that
+    // dropped a node from its registry but kept declaring it
+    // would re-create the very Device the server has just
+    // deleted, on the next Wi-Fi reconnect.
+    //
+    // The declared array is compacted and the count lowered,
+    // then RegistrationService is asked to run again. The
+    // Control Server sees a declaration without that child and
+    // does what it does for any child a module stops declaring:
+    // nothing, because the row is already gone.
+    //
+    // Returns false and changes nothing if the key is not
+    // declared or the module has not started.
+    //
+    // Success means the declaration was ACCEPTED, not that it
+    // registered. Poll reRegistrationState() for that, exactly
+    // as after an add.
+    bool removeDeviceAtRuntime(
+        const String& deviceKey);
+
+
+    // --------------------------------------------------
     // How the re-registration is going
     // --------------------------------------------------
     //
