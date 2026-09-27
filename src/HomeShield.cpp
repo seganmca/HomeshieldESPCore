@@ -225,6 +225,14 @@ void HomeShieldClass::Start(
         false;
 
 
+    _registrationLatched =
+        false;
+
+
+    _sessionReady =
+        false;
+
+
     // Marked started before the services are created: addDevice()
     // must be refused from here on, and the registration task reads
     // the declared array as soon as it is running.
@@ -343,6 +351,16 @@ void HomeShieldClass::loop()
                 false;
 
             _wasWifiConnected =
+                false;
+
+            // The session is over, and so is this Wi-Fi session's
+            // registration: RegistrationService registers again on the
+            // way back, and the next session's initial heartbeat waits
+            // for that. See _registrationLatched.
+            _sessionReady =
+                false;
+
+            _registrationLatched =
                 false;
         }
 
@@ -486,7 +504,86 @@ void HomeShieldClass::loop()
 
 
     /*
-     * Heartbeat.
+     * Session readiness - the immediate initial heartbeat.
+     *
+     * Until this existed the first heartbeat of every session waited a
+     * full interval: _lastHeartbeat is reset to "now" on Wi-Fi reconnect
+     * and on MQTT initialisation, so a board that had just booted or
+     * reconnected said nothing for thirty seconds and the app showed
+     * whatever the Control Server last believed.
+     *
+     * Now, on the false -> true edge of SessionReady() - boot, Wi-Fi
+     * reconnect, MQTT reconnect - the board sends one heartbeat
+     * straight away, restarts the ordinary interval from that moment,
+     * and asks the sketch to publish every device's current state. The
+     * heartbeat goes first so the Control Server marks the module
+     * Online before it hears what the devices are doing, which is the
+     * order DeviceMessageRouter has always assumed.
+     *
+     * The heartbeat is NOT given a state payload. It is module-scoped
+     * by design (M36/M44) and the server's heartbeat path never touches
+     * device state; the snapshot travels as the ordinary per-device
+     * DeviceStateChanged messages the server already de-duplicates.
+     */
+    if (!_registrationLatched &&
+        _registrationService != nullptr &&
+        _registrationService->IsRegistered())
+    {
+        _registrationLatched = true;
+    }
+
+
+    bool sessionReady =
+        SessionReady();
+
+
+    if (!sessionReady)
+    {
+        if (_sessionReady)
+        {
+            DEBUG_LOG(
+                "[HomeShield] Session lost. The next one starts with an "
+                "immediate heartbeat.");
+        }
+
+        _sessionReady =
+            false;
+    }
+    else if (!_sessionReady)
+    {
+        _sessionReady =
+            true;
+
+
+        DEBUG_LOG(
+            "[HomeShield] Session ready. Sending the initial heartbeat and "
+            "synchronising device state.");
+
+
+        publishHeartbeat();
+
+
+        // The periodic interval runs from HERE, so the next heartbeat
+        // is one interval after this one - never a second one on the
+        // same pass, and never a second timer.
+        _lastHeartbeat =
+            millis();
+
+
+        if (_stateSyncHandler != nullptr)
+        {
+            _stateSyncHandler();
+        }
+    }
+
+
+    /*
+     * Periodic heartbeat. Unchanged: same condition, same interval.
+     *
+     * Deliberately still gated on MqttConnected() rather than on
+     * SessionReady(), so a board whose registration is failing keeps
+     * heartbeating exactly as it did before - the immediate one is an
+     * addition, not a replacement.
      */
     if (MqttConnected())
     {
@@ -595,6 +692,14 @@ void HomeShieldClass::setModuleCommandHandler(
     ModuleCommandHandler handler)
 {
     _moduleCommandHandler =
+        handler;
+}
+
+
+void HomeShieldClass::setStateSyncHandler(
+    StateSyncHandler handler)
+{
+    _stateSyncHandler =
         handler;
 }
 
@@ -1424,6 +1529,14 @@ bool HomeShieldClass::MqttConnected()
     return
         _mqttInitialized &&
         _mqttService.connected();
+}
+
+
+bool HomeShieldClass::SessionReady()
+{
+    return
+        _registrationLatched &&
+        MqttConnected();
 }
 
 void HomeShieldClass::SetBatteryLevel(

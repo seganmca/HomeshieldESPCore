@@ -2085,6 +2085,28 @@ void EspNowHubClass::SendNodeReportAck(
 // cleared only on a true - which is the same "advance only on a successful
 // publish" rule every sketch in this tree already follows, and is what makes a
 // reading survive a Wi-Fi drop without the node knowing or caring.
+//
+// --------------------------------------------------
+// Why the hub does NOT replay last-known node state on reconnect
+// --------------------------------------------------
+//
+// The hub's own session sync is the immediate heartbeat HomeShieldClass sends
+// when the session becomes ready. Unlike a relay board, it deliberately does
+// not republish each node's last reading at that moment, and must not:
+//
+//   - The Control Server treats a child's DeviceStateChanged as the NODE
+//     speaking - DeviceMessageRouter calls ReportReachable on it. Replaying a
+//     reading the hub merely remembers would mark a sleeping, flat or missing
+//     sensor Online, which is the exact lie M41's NodeAvailability exists to
+//     avoid.
+//   - The server already holds each child's last reported state and when it
+//     was reported (M44), persisted across its own restarts. The hub's RAM copy
+//     is never fresher than that, and after a hub reboot it has none at all.
+//
+// What IS delivered on reconnect is anything genuinely new: a reading ACKed
+// while MQTT was down stays pending here and goes out on the first pass the
+// connection is back. A node's own "initial heartbeat" is its first report,
+// which it sends on every wake - including the first boot after adoption.
 void EspNowHubClass::PublishPendingStates()
 {
     // Nothing can be delivered and nothing should be attempted. Checked here

@@ -60,6 +60,32 @@ typedef void (*ModuleCommandHandler)(
 
 
 // --------------------------------------------------
+// State sync handler (immediate initial heartbeat)
+// --------------------------------------------------
+//
+// Called once every time the module's session with the Control
+// Server becomes READY - see SessionReady() - which is after boot,
+// after a Wi-Fi reconnect and after an MQTT reconnect. It runs
+// immediately AFTER the library has sent the initial heartbeat
+// for that session, from loop() (never from the MQTT callback),
+// so the handler may publish freely.
+//
+// Its job is to send every device's CURRENT state, whether or not
+// it has changed. The Control Server treats a repeated state as a
+// no-op (no history row, no automation trigger), so the snapshot
+// costs nothing when the server already agrees and repairs it
+// when it does not - a relay switched by hand while the server
+// was away, a server that restarted, a phone that reconnected.
+//
+// The usual implementation resets the sketch's "last published"
+// markers so the sketch's ordinary reporting path sends and, if
+// needed, retries every state. There is ONE sync per session and
+// no timer of its own.
+
+typedef void (*StateSyncHandler)();
+
+
+// --------------------------------------------------
 // Device Telemetry
 // --------------------------------------------------
 //
@@ -192,6 +218,10 @@ public:
     // Settable so a board with a different power budget can say so. May be
     // called before or after begin()/beginModule(); it takes effect on the
     // next heartbeat either way. Zero or less is ignored.
+    //
+    // The interval is the gap BETWEEN heartbeats only. The first one of
+    // every session is sent immediately the session becomes ready (boot,
+    // Wi-Fi reconnect, MQTT reconnect) and the interval runs from there.
     void setHeartbeatInterval(
         unsigned long milliseconds);
 
@@ -204,6 +234,12 @@ public:
     // ModuleCommandHandler. May be set at any time.
     void setModuleCommandHandler(
         ModuleCommandHandler handler);
+
+
+    // Receives the once-per-session "publish your current state"
+    // call; see StateSyncHandler. May be set at any time.
+    void setStateSyncHandler(
+        StateSyncHandler handler);
 
 
     // ==================================================
@@ -410,6 +446,22 @@ public:
 
 
     // --------------------------------------------------
+    // Session ready (immediate initial heartbeat)
+    // --------------------------------------------------
+    //
+    // MQTT is connected AND this board has registered with the
+    // Control Server since it last joined Wi-Fi. That is the moment
+    // a report can actually land: MQTT routinely comes up a second
+    // or two before HTTP registration finishes, and on a first boot
+    // the server drops anything from hardware it has not registered.
+    //
+    // The false -> true edge is what sends the immediate heartbeat
+    // and calls the StateSyncHandler. Sketches should gate their
+    // state publishing on this rather than on MqttConnected().
+    bool SessionReady();
+
+
+    // --------------------------------------------------
     // Telemetry
     // --------------------------------------------------
 
@@ -606,6 +658,31 @@ private:
 
 
     bool _mqttInitialized = false;
+
+
+    // --------------------------------------------------
+    // Session readiness (immediate initial heartbeat)
+    // --------------------------------------------------
+    //
+    // _registrationLatched: registration has succeeded at least once
+    // since this board last joined Wi-Fi. LATCHED rather than read
+    // live from RegistrationService, deliberately: a Sensor Hub's
+    // addDeviceAtRuntime()/removeDeviceAtRuntime() clears the
+    // service's flag while it re-registers, and reading it live
+    // would pause the heartbeat for the length of every node
+    // onboarding - or for good, if the new declaration were refused.
+    // The latch is cleared only by losing Wi-Fi, which is also what
+    // makes RegistrationService register again.
+    //
+    // _sessionReady: SessionReady() as of the previous loop() pass.
+    // Its false -> true edge sends the immediate heartbeat.
+    bool _registrationLatched = false;
+
+    bool _sessionReady = false;
+
+
+    StateSyncHandler
+        _stateSyncHandler = nullptr;
 
 
     // Milestone 37 (D1). The broker host is the Control Server URL's host.
