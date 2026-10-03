@@ -442,6 +442,18 @@ public:
     bool IsConnected() const;
 
 
+    // --------------------------------------------------
+    // M47. The Control Server's host
+    // --------------------------------------------------
+    //
+    // The host part of the provisioned Control Server URL - the
+    // same host the library already uses as the MQTT broker
+    // (M37 D1). An audio intercom streams RTP to this host; it is
+    // exposed rather than re-derived so the two can never differ.
+    // Empty until begin() has run on a provisioned board.
+    String ControlServerHost() const;
+
+
     bool MqttConnected();
 
 

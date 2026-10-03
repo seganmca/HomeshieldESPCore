@@ -37,4 +37,19 @@ namespace DeviceEventTypes
     // closed the door, and routing this through DeviceStateChanged
     // would write exactly that lie into the history.
     constexpr const char* NodeAvailability   = "NodeAvailability";
+
+
+    // ------------------------------------------------------------
+    // M47. An audio intercom's device-scoped status.
+    // ------------------------------------------------------------
+    //
+    // Payload: {"volume":70,"mic":"ok","spk":"ok","phase":"idle"}
+    // (phase: idle | ringing | open | streaming | fault; "ssrc" is
+    // added while in a call).
+    //
+    // NOT a state change: it writes no history row and fires no
+    // automation. The Control Server reads the volume into
+    // DeviceInfo.IntercomVolume and the mic/speaker health into the
+    // active call.
+    constexpr const char* IntercomStatus     = "IntercomStatus";
 }

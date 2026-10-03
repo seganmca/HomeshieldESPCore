@@ -1473,6 +1473,13 @@ String HomeShieldClass::GetHardwareId()
 }
 
 
+String HomeShieldClass::ControlServerHost() const
+{
+    // M47. See HomeShield.h.
+    return _mqttHost;
+}
+
+
 bool HomeShieldClass::IsConnected() const
 {
     return WiFi.status() ==

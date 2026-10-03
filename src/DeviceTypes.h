@@ -20,4 +20,8 @@ namespace DeviceTypes
 
     constexpr const char* mmWaveRadar  = "mmwave-radar";
 
+    // M47. Full-duplex audio intercom (XIAO ESP32-S3 Sense + MAX98357A),
+    // a mono-device. Mirrors DeviceTypeKeys.AudioIntercom on the servers.
+    constexpr const char* AudioIntercom = "audio-intercom";
+
 }
