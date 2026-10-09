@@ -235,6 +235,13 @@ public:
     // it, because what a state MEANS is the sketch's - a tank's
     // three float positions are not something the framework should
     // know.
+    //
+    // It also returns WITHOUT sleeping when a sensor wake pin no
+    // longer reads what the just-delivered report was read from
+    // (bounded per wake). Every report refreshes the node's "last
+    // heartbeat" end to end, so it must not leave a state behind
+    // that is already stale; the sketch's loop() simply reads the
+    // sensor again and calls this again, as it always does.
     void reportAndSleep(
         int state);
 
@@ -523,6 +530,29 @@ private:
     int _wakePinCount = 0;
 
     HsNodeWake _wakeReason = WAKE_POWER_ON;
+
+    // --------------------------------------------------
+    // What the delivered report was read from
+    // --------------------------------------------------
+    //
+    // Every report is the node's heartbeat AND its current state, and the
+    // servers stamp "last heard" from it. So a report that is already out of
+    // date when the node goes to sleep would be shown as freshly confirmed
+    // for up to an hour. reportAndSleep() snapshots the SENSOR wake pins
+    // (BIT(n) = GPIO n read HIGH) at the moment the sketch hands it the
+    // reading; EnterDeepSleep() compares against that, not only against the
+    // levels it is about to arm from.
+    uint64_t _reportedHighMask = 0;
+
+    bool _reportedLevelsValid = false;
+
+    // Consecutive "a sensor moved while that report was in flight, report
+    // again" rounds in this wake. Bounded so a chattering input cannot keep
+    // the radio up indefinitely; past the bound the node sleeps armed from
+    // the live levels, exactly as it did before this guard existed.
+    int _staleReportRounds = 0;
+
+    static constexpr int MaxStaleReportRounds = 3;
 
     // Which GPIOs actually caused the wake, latched by the hardware and read
     // before anything reconfigures a pad. BIT(n) set means GPIO n fired. Zero

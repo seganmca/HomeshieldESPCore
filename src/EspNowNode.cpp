@@ -2183,6 +2183,24 @@ void EspNowNodeClass::reportAndSleep(
     if (_state != State::Provisioned) return;
 
 
+    // What this reading was taken from. The sketch read its sensor
+    // immediately before calling, so the wake pins as they are NOW are the
+    // levels behind `state`. The reset button is excluded: it is not part of
+    // any reading, and a press during delivery must not cost a re-report.
+    _reportedHighMask = 0;
+
+    for (int i = 0; i < _wakePinCount; i++)
+    {
+        uint8_t pin = _wakePins[i];
+
+        if (_sleep.resetPin >= 0 && pin == (uint8_t)_sleep.resetPin) continue;
+
+        if (digitalRead(pin) == HIGH) _reportedHighMask |= (1ULL << pin);
+    }
+
+    _reportedLevelsValid = true;
+
+
     bool delivered = DeliverReport(state);
 
 
@@ -2214,6 +2232,69 @@ void EspNowNodeClass::reportAndSleep(
 void EspNowNodeClass::EnterDeepSleep(
     bool delivered)
 {
+    // --------------------------------------------------
+    // Is what the hub just acknowledged still true?
+    // --------------------------------------------------
+    //
+    // Delivery can take from milliseconds (cached channel) to several seconds
+    // (a sweep). A float, a reed or the radar's OUT line that changed inside
+    // that window used to be armed PAST: the arming below reads the live
+    // level and waits for the opposite one, so the change that already
+    // happened was never reported - and the hub, the servers and the phone
+    // went on showing the old state, now with a fresh heartbeat beside it
+    // vouching for it, until the next change or the hourly timer.
+    //
+    // So a sensor pin that no longer reads what the delivered report was
+    // read from sends control back to the sketch, whose loop() reads the
+    // sensor again and reports the current state. Nothing has been armed or
+    // held yet, so there is nothing to undo, and the radio is still up.
+    //
+    // Only after a delivered report: an undelivered one changed nothing
+    // anywhere, and retrying it immediately would spend a full sweep of
+    // battery on what the 5-minute recovery wake does anyway.
+    if (delivered &&
+        _reportedLevelsValid &&
+        _staleReportRounds < MaxStaleReportRounds)
+    {
+        for (int i = 0; i < _wakePinCount; i++)
+        {
+            uint8_t pin = _wakePins[i];
+
+            if (_sleep.resetPin >= 0 && pin == (uint8_t)_sleep.resetPin) continue;
+
+            bool reportedHigh = (_reportedHighMask & (1ULL << pin)) != 0;
+
+            bool nowHigh = digitalRead(pin) == HIGH;
+
+            if (reportedHigh == nowHigh) continue;
+
+
+            _staleReportRounds++;
+
+            _reportedLevelsValid = false;
+
+            DEBUG_LOG_PRINT(
+                "[EspNowNode] gpio");
+
+            DEBUG_LOG_PRINT(pin);
+
+            DEBUG_LOG_PRINT(
+                " changed while the report was being delivered. Reporting the "
+                "current state instead of sleeping (round ");
+
+            DEBUG_LOG_PRINT(_staleReportRounds);
+
+            DEBUG_LOG_PRINT("/");
+
+            DEBUG_LOG_PRINT(MaxStaleReportRounds);
+
+            DEBUG_LOG(").");
+
+            return;
+        }
+    }
+
+
     // The recovery flag, which is the whole of the escalation: delivered means
     // the normal hour, not delivered means five minutes and keep trying.
     s_rtcRecovering = delivered ? 0 : 1;
